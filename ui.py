@@ -65,10 +65,10 @@ def render_controls() -> None:
 
     data_editor_fn = getattr(st, "data_editor", None)
     if data_editor_fn is not None:
-        edited = data_editor_fn(points_dataframe, num_rows="dynamic", use_container_width=True)
+        edited = data_editor_fn(points_dataframe, num_rows="dynamic", width="stretch")
         st.session_state["points_dataframe"] = ensure_points_dataframe(edited)
     else:
-        st.dataframe(points_dataframe, use_container_width=True)
+        st.dataframe(points_dataframe, width="stretch")
 
     st.divider()
     st.subheader("Dodaj punkt ręcznie")
@@ -78,7 +78,7 @@ def render_controls() -> None:
     manual_transport_rate = st.number_input("ST (stawka transportowa)", value=1.0, min_value=0.0, format="%.6f")
     manual_mass = st.number_input("M (masa)", value=1.0, min_value=0.0, format="%.6f")
 
-    if st.button("Dodaj punkt", use_container_width=True):
+    if st.button("Dodaj punkt", width="stretch"):
         st.session_state["points_dataframe"] = append_point(
             st.session_state["points_dataframe"],
             manual_longitude,
@@ -88,7 +88,7 @@ def render_controls() -> None:
         )
         st.session_state["map_marker_positions_snapshot"] = ()
 
-    if st.button("Wyczyść wszystkie punkty", use_container_width=True):
+    if st.button("Wyczyść wszystkie punkty", width="stretch"):
         st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude", "transport_rate", "mass"])
         st.session_state["map_marker_positions_snapshot"] = ()
 
@@ -107,7 +107,7 @@ def render_controls() -> None:
 
         distances_df = compute_point_distances(points_dataframe, centroid_longitude, centroid_latitude)
         st.subheader("Odległości (metryka euklidesowa)")
-        st.dataframe(distances_df, use_container_width=True)
+        st.dataframe(distances_df, width="stretch")
 
     st.divider()
     st.subheader("Domyślne wartości dla punktów dodanych z mapy")
