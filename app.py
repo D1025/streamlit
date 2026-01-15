@@ -2,15 +2,9 @@ import math
 import streamlit as streamlit
 import pandas as pandas
 import pydeck as pydeck
-
-try:
-    import folium
-    from folium.plugins import Draw
-    from streamlit_folium import st_folium
-
-    folium_is_available = True
-except Exception:
-    folium_is_available = False
+import folium
+from folium.plugins import Draw
+from streamlit_folium import st_folium
 
 
 class CentroidCalculator:
@@ -365,150 +359,96 @@ with map_column:
     polyline_path = build_polyline_path(points_dataframe)
 
     streamlit.subheader("Mapa")
-    if folium_is_available:
-        if "map_center_latitude" not in streamlit.session_state or "map_center_longitude" not in streamlit.session_state:
-            streamlit.session_state["map_center_latitude"] = float(map_center_latitude)
-            streamlit.session_state["map_center_longitude"] = float(map_center_longitude)
-        if "map_zoom_level" not in streamlit.session_state:
-            streamlit.session_state["map_zoom_level"] = 11
+    if "map_center_latitude" not in streamlit.session_state or "map_center_longitude" not in streamlit.session_state:
+        streamlit.session_state["map_center_latitude"] = float(map_center_latitude)
+        streamlit.session_state["map_center_longitude"] = float(map_center_longitude)
+    if "map_zoom_level" not in streamlit.session_state:
+        streamlit.session_state["map_zoom_level"] = 11
 
-        folium_map = folium.Map(
-            location=[float(streamlit.session_state["map_center_latitude"]), float(streamlit.session_state["map_center_longitude"])],
-            zoom_start=int(streamlit.session_state["map_zoom_level"]),
-            control_scale=True
-        )
+    folium_map = folium.Map(
+        location=[float(streamlit.session_state["map_center_latitude"]), float(streamlit.session_state["map_center_longitude"])],
+        zoom_start=int(streamlit.session_state["map_zoom_level"]),
+        control_scale=True
+    )
 
-        editable_feature_group = folium.FeatureGroup(name="Punkty")
-        editable_feature_group.add_to(folium_map)
+    editable_feature_group = folium.FeatureGroup(name="Punkty")
+    editable_feature_group.add_to(folium_map)
 
-        for _, row in points_dataframe.iterrows():
-            folium.Marker(
-                location=[float(row["latitude"]), float(row["longitude"])],
-                tooltip=f"Y={float(row['latitude']):.6f}, X={float(row['longitude']):.6f}"
-            ).add_to(editable_feature_group)
+    for _, row in points_dataframe.iterrows():
+        folium.Marker(
+            location=[float(row["latitude"]), float(row["longitude"])],
+            tooltip=f"Y={float(row['latitude']):.6f}, X={float(row['longitude']):.6f}"
+        ).add_to(editable_feature_group)
 
-        Draw(
-            export=False,
-            feature_group=editable_feature_group,
-            draw_options={
-                "polyline": False,
-                "polygon": False,
-                "rectangle": False,
-                "circle": False,
-                "circlemarker": False
-            },
-            edit_options={}
+    Draw(
+        export=False,
+        feature_group=editable_feature_group,
+        draw_options={
+            "polyline": False,
+            "polygon": False,
+            "rectangle": False,
+            "circle": False,
+            "circlemarker": False
+        },
+        edit_options={}
+    ).add_to(folium_map)
+
+    if len(polyline_path) >= 4:
+        folium.PolyLine(
+            locations=[[latitude, longitude] for longitude, latitude in polyline_path],
+            weight=3
         ).add_to(folium_map)
 
-        if len(polyline_path) >= 4:
-            folium.PolyLine(
-                locations=[[latitude, longitude] for longitude, latitude in polyline_path],
-                weight=3
-            ).add_to(folium_map)
+    if len(points_dataframe) > 0:
+        folium.CircleMarker(
+            location=[float(centroid_latitude), float(centroid_longitude)],
+            radius=14,
+            color="red",
+            fill=True,
+            fill_color="red",
+            fill_opacity=0.95
+        ).add_to(folium_map)
 
-        if len(points_dataframe) > 0:
-            folium.CircleMarker(
-                location=[float(centroid_latitude), float(centroid_longitude)],
-                radius=14,
-                color="red",
-                fill=True,
-                fill_color="red",
-                fill_opacity=0.95
-            ).add_to(folium_map)
+    map_interaction = st_folium(
+        folium_map,
+        height=600,
+        use_container_width=True,
+        key="interactive_folium_map",
+        returned_objects=["all_drawings", "last_active_drawing", "center", "zoom"],
+        center=[float(streamlit.session_state["map_center_latitude"]), float(streamlit.session_state["map_center_longitude"])],
+        zoom=int(streamlit.session_state["map_zoom_level"])
+    )
 
-        map_interaction = st_folium(
-            folium_map,
-            height=600,
-            use_container_width=True,
-            key="interactive_folium_map",
-            returned_objects=["all_drawings", "last_active_drawing", "center", "zoom"],
-            center=[float(streamlit.session_state["map_center_latitude"]), float(streamlit.session_state["map_center_longitude"])],
-            zoom=int(streamlit.session_state["map_zoom_level"])
-        )
+    if isinstance(map_interaction, dict):
+        returned_center = map_interaction.get("center")
+        returned_zoom = map_interaction.get("zoom")
+        if isinstance(returned_center, dict) and "lat" in returned_center and "lng" in returned_center:
+            try:
+                streamlit.session_state["map_center_latitude"] = float(returned_center["lat"])
+                streamlit.session_state["map_center_longitude"] = float(returned_center["lng"])
+            except Exception:
+                pass
+        if returned_zoom is not None:
+            try:
+                streamlit.session_state["map_zoom_level"] = int(returned_zoom)
+            except Exception:
+                pass
 
-        if isinstance(map_interaction, dict):
-            returned_center = map_interaction.get("center")
-            returned_zoom = map_interaction.get("zoom")
-            if isinstance(returned_center, dict) and "lat" in returned_center and "lng" in returned_center:
-                try:
-                    streamlit.session_state["map_center_latitude"] = float(returned_center["lat"])
-                    streamlit.session_state["map_center_longitude"] = float(returned_center["lng"])
-                except Exception:
-                    pass
-            if returned_zoom is not None:
-                try:
-                    streamlit.session_state["map_zoom_level"] = int(returned_zoom)
-                except Exception:
-                    pass
+        all_drawings = map_interaction.get("all_drawings")
+        marker_positions = extract_marker_positions_from_drawings(all_drawings)
+        marker_positions_signature = tuple((round(float(longitude_value), 8), round(float(latitude_value), 8)) for longitude_value, latitude_value in marker_positions)
 
-            all_drawings = map_interaction.get("all_drawings")
-            marker_positions = extract_marker_positions_from_drawings(all_drawings)
-            marker_positions_signature = tuple((round(float(longitude_value), 8), round(float(latitude_value), 8)) for longitude_value, latitude_value in marker_positions)
-
-            if marker_positions_signature != tuple(streamlit.session_state.get("map_marker_positions_snapshot", ())):
-                previous_points_dataframe = ensure_points_dataframe(streamlit.session_state["points_dataframe"])
-                previous_signature = points_dataframe_signature(previous_points_dataframe)
-                synchronized_points_dataframe = synchronize_points_dataframe_with_marker_positions(
-                    previous_points_dataframe,
-                    marker_positions,
-                    float(streamlit.session_state["map_default_transport_rate"]),
-                    float(streamlit.session_state["map_default_mass"])
-                )
-                new_signature = points_dataframe_signature(synchronized_points_dataframe)
-                streamlit.session_state["map_marker_positions_snapshot"] = marker_positions_signature
-                if new_signature != previous_signature:
-                    streamlit.session_state["points_dataframe"] = synchronized_points_dataframe
-                    streamlit.rerun()
-    else:
-        streamlit.warning("Interaktywne dodawanie i przesuwanie punktów wymaga folium oraz streamlit-folium. Jeśli środowisko ich nie posiada, dodawaj punkty ręcznie lub z pliku.")
-
-        polyline_layer = None
-        if len(polyline_path) >= 4:
-            polyline_layer = pydeck.Layer(
-                "PathLayer",
-                data=[{"path": polyline_path}],
-                get_path="path",
-                width_scale=8,
-                width_min_pixels=2
+        if marker_positions_signature != tuple(streamlit.session_state.get("map_marker_positions_snapshot", ())):
+            previous_points_dataframe = ensure_points_dataframe(streamlit.session_state["points_dataframe"])
+            previous_signature = points_dataframe_signature(previous_points_dataframe)
+            synchronized_points_dataframe = synchronize_points_dataframe_with_marker_positions(
+                previous_points_dataframe,
+                marker_positions,
+                float(streamlit.session_state["map_default_transport_rate"]),
+                float(streamlit.session_state["map_default_mass"])
             )
-
-        points_layer = pydeck.Layer(
-            "ScatterplotLayer",
-            data=[{"longitude": float(row["longitude"]), "latitude": float(row["latitude"]), "fill_color": [0, 0, 0, 180]} for _, row in points_dataframe.iterrows()],
-            get_position="[longitude, latitude]",
-            get_radius=90,
-            radius_min_pixels=4,
-            get_fill_color="fill_color",
-            pickable=True
-        )
-
-        centroid_layer = None
-        if len(points_dataframe) > 0:
-            centroid_layer = pydeck.Layer(
-                "ScatterplotLayer",
-                data=[{"longitude": float(centroid_longitude), "latitude": float(centroid_latitude), "fill_color": [255, 0, 0, 220]}],
-                get_position="[longitude, latitude]",
-                get_radius=260,
-                radius_min_pixels=12,
-                get_fill_color="fill_color",
-                pickable=True
-            )
-
-        layers = []
-        if polyline_layer is not None:
-            layers.append(polyline_layer)
-        layers.append(points_layer)
-        if centroid_layer is not None:
-            layers.append(centroid_layer)
-
-        deck = pydeck.Deck(
-            layers=layers,
-            initial_view_state=pydeck.ViewState(
-                longitude=float(map_center_longitude),
-                latitude=float(map_center_latitude),
-                zoom=11,
-                pitch=0
-            ),
-            map_style=None
-        )
-        streamlit.pydeck_chart(deck, use_container_width=True)
+            new_signature = points_dataframe_signature(synchronized_points_dataframe)
+            streamlit.session_state["map_marker_positions_snapshot"] = marker_positions_signature
+            if new_signature != previous_signature:
+                streamlit.session_state["points_dataframe"] = synchronized_points_dataframe
+                streamlit.rerun()
