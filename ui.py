@@ -27,6 +27,9 @@ def init_session_state() -> None:
     if "points_dataframe" not in st.session_state:
         st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude"])
 
+    if "active_page" not in st.session_state:
+        st.session_state["active_page"] = "Obliczenia"
+
     if "calculation_method" not in st.session_state:
         st.session_state["calculation_method"] = "Środek ciężkości"
 
@@ -72,6 +75,119 @@ def bump_interactive_folium_map_key() -> None:
     st.session_state["interactive_folium_map_key_version"] = int(st.session_state["interactive_folium_map_key_version"]) + 1
 
 
+def render_sidebar_menu() -> Tuple[str, str]:
+    with st.sidebar:
+        st.title("Menu")
+
+        active_page = st.radio(
+            "Widok",
+            options=["Obliczenia", "Metody", "Pomoc"],
+            index=["Obliczenia", "Metody", "Pomoc"].index(str(st.session_state.get("active_page", "Obliczenia"))),
+            help="Wybierz, co chcesz zobaczyć: obliczenia, opis metod albo pomoc.",
+            key="active_page_radio",
+        )
+        st.session_state["active_page"] = str(active_page)
+
+        calculation_method = st.radio(
+            "Metoda",
+            options=["Środek ciężkości", "TOPSIS"],
+            index=0 if str(st.session_state.get("calculation_method", "Środek ciężkości")) != "TOPSIS" else 1,
+            help="Zmień sposób wyznaczania wyniku. Dla TOPSIS możesz zdefiniować własne kryteria, wagi i typ (benefit/cost).",
+            key="calculation_method_radio",
+        )
+
+        if str(calculation_method) != str(st.session_state.get("calculation_method")):
+            st.session_state["calculation_method"] = str(calculation_method)
+            st.session_state["map_marker_positions_snapshot"] = ()
+            bump_interactive_folium_map_key()
+
+        st.divider()
+        render_context_help_in_sidebar(str(st.session_state.get("active_page")), str(st.session_state.get("calculation_method")))
+
+    return str(st.session_state.get("active_page")), str(st.session_state.get("calculation_method"))
+
+
+def render_context_help_in_sidebar(active_page: str, calculation_method: str) -> None:
+    if active_page == "Obliczenia":
+        st.subheader("Pomoc kontekstowa")
+        st.write("Mapa: dodawaj markerem, edytuj w trybie Edit, usuwaj w trybie Delete.")
+        if calculation_method == "Środek ciężkości":
+            st.write("Wymagane kolumny: longitude, latitude. Zalecane: transport_rate, mass.")
+        else:
+            st.write("Wymagane kolumny: longitude, latitude oraz co najmniej jedno kryterium numeryczne.")
+            st.write("Dla każdego kryterium ustaw wagę oraz typ: benefit (im więcej tym lepiej) albo cost (im mniej tym lepiej).")
+    elif active_page == "Metody":
+        st.subheader("Szybki skrót")
+        st.write("Środek ciężkości: punkt minimalizujący ważoną sumę odległości euklidesowych dla wag ST·M.")
+        st.write("TOPSIS: ranking alternatyw na podstawie odległości do ideału najlepszego i najgorszego.")
+    else:
+        st.subheader("Najczęstsze pytania")
+        st.write("Nie widzę zmian po przesunięciu mapy: porusz mapą, a potem dodaj marker narzędziem markera.")
+        st.write("Excel: do odczytu .xlsx wymagany jest openpyxl w requirements.txt.")
+
+
+def render_methods_page() -> None:
+    st.header("Opis metod")
+
+    st.subheader("Środek ciężkości")
+    st.write(
+        "Metoda wyznacza punkt wynikowy jako średnią ważoną współrzędnych. "
+        "Waga punktu to iloczyn stawki transportowej i masy (ST·M)."
+    )
+    st.write("Wzory: X = Σ(ST·M·X) / Σ(ST·M), Y = Σ(ST·M·Y) / Σ(ST·M).")
+    st.write(
+        "Interpretacja: wynik jest położeniem, które w tym uproszczonym modelu minimalizuje sumę ważoną odległości "
+        "euklidesowych do punktów wejściowych."
+    )
+    st.write(
+        "Dane wejściowe: "
+        "longitude, latitude oraz opcjonalnie transport_rate i mass. Jeśli brak, przyjmowane są wartości 1.0."
+    )
+
+    st.divider()
+
+    st.subheader("TOPSIS")
+    st.write(
+        "TOPSIS (Technique for Order Preference by Similarity to Ideal Solution) tworzy ranking alternatyw na podstawie "
+        "ich podobieństwa do ideału najlepszego i oddalenia od ideału najgorszego."
+    )
+    st.write(
+        "Kroki: normalizacja kryteriów, uwzględnienie wag, wyznaczenie ideału najlepszego i najgorszego (benefit/cost), "
+        "odległości do ideałów, a następnie wynik: score = d(worst) / (d(best) + d(worst))."
+    )
+    st.write(
+        "Interpretacja: im większy score, tym lepsza alternatywa. Wynikowy punkt to najlepsza alternatywa z rankingu."
+    )
+    st.write(
+        "Dane wejściowe: longitude, latitude oraz minimum jedno kryterium numeryczne (np. koszt, czas, ryzyko, dostępność). "
+        "Dla kryteriów ustawiasz wagi oraz typ: benefit (większe lepsze) albo cost (mniejsze lepsze)."
+    )
+
+
+def render_help_page() -> None:
+    st.header("Pomoc")
+
+    st.subheader("Pliki i kolumny")
+    st.write("CSV/XLSX: wymagane są kolumny longitude i latitude (mogą być też lon/lat lub x/y).")
+    st.write("Środek ciężkości: transport_rate i mass są opcjonalne.")
+    st.write("TOPSIS: dodaj własne kolumny-kryteria numeryczne.")
+
+    st.divider()
+
+    st.subheader("Mapa")
+    st.write("Dodawanie punktu: wybierz narzędzie markera i kliknij na mapie.")
+    st.write("Edycja punktu: wybierz Edit i przeciągnij marker w nowe miejsce.")
+    st.write("Usuwanie punktu: wybierz Delete i kliknij marker.")
+    st.write("Jeśli akurat przesuwasz mapę, dodawanie markera może nie zadziałać — najpierw wybierz narzędzie markera, potem kliknij.")
+
+    st.divider()
+
+    st.subheader("TOPSIS – praktyczne wskazówki")
+    st.write("Jeśli kryteria są w różnych skalach (np. zł, minuty, punkty), TOPSIS i tak je normalizuje.")
+    st.write("Gdy kryterium jest kosztem (im mniej, tym lepiej), ustaw typ na cost.")
+    st.write("Wagi możesz ustawiać dowolnie — liczy się ich proporcja (waga 2 jest dwa razy ważniejsza niż 1).")
+
+
 def update_topsis_state_for_available_criteria(available_criteria_columns: List[str]) -> None:
     selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
     selected_criteria_columns = [str(column_name).strip().lower() for column_name in selected_criteria_columns if str(column_name).strip()]
@@ -108,6 +224,7 @@ def render_controls(calculation_method: str) -> None:
     uploaded_file = st.file_uploader(
         "Wczytaj punkty z pliku (CSV/XLSX).",
         type=["csv", "xlsx", "xls"],
+        help="Wymagane: longitude/latitude (mogą być też lon/lat lub x/y). Dla TOPSIS możesz mieć dodatkowe kolumny-kryteria.",
     )
     if uploaded_file is not None:
         uploaded_points_dataframe = read_points_from_uploaded_file(uploaded_file)
@@ -122,8 +239,17 @@ def render_controls(calculation_method: str) -> None:
         st.divider()
         st.subheader("Kryteria TOPSIS")
 
-        criterion_column_name = st.text_input("Nazwa kryterium (kolumny)", value="")
-        criterion_default_value = st.number_input("Domyślna wartość kryterium", value=1.0, format="%.6f")
+        criterion_column_name = st.text_input(
+            "Nazwa kryterium (kolumny)",
+            value="",
+            help="Dodaj nazwę nowej kolumny-kryterium. To będzie liczba w tabeli (np. koszt, czas, ryzyko).",
+        )
+        criterion_default_value = st.number_input(
+            "Domyślna wartość kryterium",
+            value=1.0,
+            format="%.6f",
+            help="Wartość startowa dla nowych punktów dodanych z mapy oraz dla nowo dodanej kolumny.",
+        )
         if st.button("Dodaj kryterium", width="stretch"):
             normalized_criterion_column_name = str(criterion_column_name).strip().lower()
             if normalized_criterion_column_name:
@@ -143,6 +269,7 @@ def render_controls(calculation_method: str) -> None:
             "Wybierz kryteria do obliczeń",
             options=available_criteria_columns,
             default=list(st.session_state.get("topsis_selected_criteria_columns", [])),
+            help="Zaznacz kryteria, które mają brać udział w rankingu TOPSIS.",
             key="topsis_selected_criteria_columns_widget",
         )
         st.session_state["topsis_selected_criteria_columns"] = [str(column_name).strip().lower() for column_name in selected_criteria_columns if str(column_name).strip()]
@@ -191,6 +318,7 @@ def render_controls(calculation_method: str) -> None:
                 value=float(current_weight_value),
                 min_value=0.0,
                 format="%.6f",
+                help="Waga kryterium. Liczy się proporcja wag między kryteriami.",
                 key=f"topsis_weight_{criterion_name}",
             )
 
@@ -199,6 +327,7 @@ def render_controls(calculation_method: str) -> None:
                 f"Typ: {criterion_name}",
                 options=["benefit", "cost"],
                 index=int(impact_index),
+                help="benefit: więcej = lepiej. cost: mniej = lepiej.",
                 key=f"topsis_impact_{criterion_name}",
             )
             criteria_impacts[criterion_name] = str(selected_impact).strip().lower()
@@ -207,6 +336,7 @@ def render_controls(calculation_method: str) -> None:
                 f"Domyślna wartość (mapa): {criterion_name}",
                 value=float(current_default_value),
                 format="%.6f",
+                help="Wartość wpisywana automatycznie dla nowych punktów dodanych z mapy.",
                 key=f"topsis_default_{criterion_name}",
             )
 
@@ -217,8 +347,20 @@ def render_controls(calculation_method: str) -> None:
         st.divider()
         st.subheader("Dodaj punkt ręcznie")
 
-        manual_longitude = st.number_input("X (longitude)", value=21.012200, format="%.6f", key="topsis_manual_longitude")
-        manual_latitude = st.number_input("Y (latitude)", value=52.229700, format="%.6f", key="topsis_manual_latitude")
+        manual_longitude = st.number_input(
+            "X (longitude)",
+            value=21.012200,
+            format="%.6f",
+            help="Długość geograficzna (X).",
+            key="topsis_manual_longitude",
+        )
+        manual_latitude = st.number_input(
+            "Y (latitude)",
+            value=52.229700,
+            format="%.6f",
+            help="Szerokość geograficzna (Y).",
+            key="topsis_manual_latitude",
+        )
 
         manual_criteria_values: Dict[str, float] = {}
         for criterion_name in selected_criteria_columns:
@@ -226,6 +368,7 @@ def render_controls(calculation_method: str) -> None:
                 f"Wartość: {criterion_name}",
                 value=float(st.session_state["topsis_default_values_by_criteria"].get(criterion_name, 1.0)),
                 format="%.6f",
+                help="Wartość kryterium dla tego punktu.",
                 key=f"topsis_manual_{criterion_name}",
             )
 
@@ -294,10 +437,36 @@ def render_controls(calculation_method: str) -> None:
     st.divider()
     st.subheader("Dodaj punkt ręcznie")
 
-    manual_longitude = st.number_input("X (longitude)", value=21.012200, format="%.6f", key="centroid_manual_longitude")
-    manual_latitude = st.number_input("Y (latitude)", value=52.229700, format="%.6f", key="centroid_manual_latitude")
-    manual_transport_rate = st.number_input("ST (stawka transportowa)", value=1.0, min_value=0.0, format="%.6f", key="centroid_manual_transport_rate")
-    manual_mass = st.number_input("M (masa)", value=1.0, min_value=0.0, format="%.6f", key="centroid_manual_mass")
+    manual_longitude = st.number_input(
+        "X (longitude)",
+        value=21.012200,
+        format="%.6f",
+        help="Długość geograficzna (X).",
+        key="centroid_manual_longitude",
+    )
+    manual_latitude = st.number_input(
+        "Y (latitude)",
+        value=52.229700,
+        format="%.6f",
+        help="Szerokość geograficzna (Y).",
+        key="centroid_manual_latitude",
+    )
+    manual_transport_rate = st.number_input(
+        "ST (stawka transportowa)",
+        value=1.0,
+        min_value=0.0,
+        format="%.6f",
+        help="Stawka transportowa dla punktu. Waga punktu = ST · M.",
+        key="centroid_manual_transport_rate",
+    )
+    manual_mass = st.number_input(
+        "M (masa)",
+        value=1.0,
+        min_value=0.0,
+        format="%.6f",
+        help="Masa (wolumen) dla punktu. Waga punktu = ST · M.",
+        key="centroid_manual_mass",
+    )
 
     if st.button("Dodaj punkt", width="stretch", key="centroid_add_point_button"):
         st.session_state["points_dataframe"] = append_point(
@@ -338,16 +507,18 @@ def render_controls(calculation_method: str) -> None:
 
     st.session_state["map_default_transport_rate"] = st.number_input(
         "Domyślne ST",
-        value=float(st.session_state["map_default_transport_rate"]),
+        value=float(st.session_state.get("map_default_transport_rate", 1.0)),
         min_value=0.0,
         format="%.6f",
+        help="Wartość ST przypisywana nowym punktom dodanym z mapy (jeśli nie uzupełnisz jej później w tabeli).",
         key="centroid_map_default_transport_rate",
     )
     st.session_state["map_default_mass"] = st.number_input(
         "Domyślne M",
-        value=float(st.session_state["map_default_mass"]),
+        value=float(st.session_state.get("map_default_mass", 1.0)),
         min_value=0.0,
         format="%.6f",
+        help="Wartość M przypisywana nowym punktom dodanym z mapy (jeśli nie uzupełnisz jej później w tabeli).",
         key="centroid_map_default_mass",
     )
 
@@ -458,8 +629,7 @@ def render_map(calculation_method: str) -> None:
 
     st.subheader("Mapa")
     st.caption(
-        "Dodawanie: wybierz narzędzie markera. Edycja: użyj narzędzia Edit i przeciągnij marker. "
-        "Usuwanie: użyj narzędzia Delete i kliknij marker."
+        "Dodawanie: wybierz narzędzie markera. Edycja: Edit i przeciągnij marker. Usuwanie: Delete i kliknij marker."
     )
 
     folium_map = folium.Map(
@@ -513,32 +683,30 @@ def render_map(calculation_method: str) -> None:
 
 
 def run_app() -> None:
-    st.set_page_config(page_title="Środek ciężkości logistyczny", layout="wide")
+    st.set_page_config(page_title="Lokalizacja punktu logistycznego", layout="wide")
 
     init_session_state()
 
-    st.title("Lokalizacja punktu logistycznego metodą środka ciężkości / TOPSIS")
-    st.write(
-        "Środek ciężkości: X = Σ(ST·M·X) / Σ(ST·M) oraz Y = Σ(ST·M·Y) / Σ(ST·M). "
-        "TOPSIS: ranking alternatyw na podstawie wybranych kryteriów (benefit/cost) i wag."
-    )
+    active_page, calculation_method = render_sidebar_menu()
 
-    calculation_method = st.radio(
-        "Metoda",
-        options=["Środek ciężkości", "TOPSIS"],
-        horizontal=True,
-        key="calculation_method_radio",
-        index=0 if str(st.session_state.get("calculation_method", "Środek ciężkości")) != "TOPSIS" else 1,
+    st.title("Lokalizacja punktu logistycznego")
+
+    if active_page == "Metody":
+        render_methods_page()
+        return
+
+    if active_page == "Pomoc":
+        render_help_page()
+        return
+
+    st.write(
+        "Wybierz metodę w menu po lewej. W widoku Obliczenia możesz dodawać i edytować punkty w tabeli oraz na mapie."
     )
-    if calculation_method != st.session_state.get("calculation_method"):
-        st.session_state["calculation_method"] = str(calculation_method)
-        st.session_state["map_marker_positions_snapshot"] = ()
-        bump_interactive_folium_map_key()
 
     control_column, map_column = st.columns([1, 2], gap="large")
 
     with map_column:
-        render_map(st.session_state["calculation_method"])
+        render_map(calculation_method)
 
     with control_column:
-        render_controls(st.session_state["calculation_method"])
+        render_controls(calculation_method)
