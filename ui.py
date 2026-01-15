@@ -59,7 +59,6 @@ def render_controls() -> None:
         uploaded_points_dataframe = read_points_from_uploaded_file(uploaded_file)
         if len(uploaded_points_dataframe) > 0:
             st.session_state["points_dataframe"] = uploaded_points_dataframe
-            # po wczytaniu danych resetujemy snapshot, żeby mapa się zsynchronizowała
             st.session_state["map_marker_positions_snapshot"] = ()
 
     points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"])
@@ -87,7 +86,6 @@ def render_controls() -> None:
             manual_transport_rate,
             manual_mass,
         )
-        # wymuść pełną synchronizację z mapą po dodaniu ręcznym
         st.session_state["map_marker_positions_snapshot"] = ()
 
     if st.button("Wyczyść wszystkie punkty", use_container_width=True):
@@ -137,7 +135,6 @@ def render_map() -> None:
 
     map_center_longitude, map_center_latitude = get_map_center(points_dataframe, centroid_longitude, centroid_latitude)
 
-    # Utrzymuj sensowny domyślny środek mapy, ale nie nadpisuj, jeśli user przesunął mapę.
     if "map_center_latitude" not in st.session_state or "map_center_longitude" not in st.session_state:
         st.session_state["map_center_latitude"] = float(map_center_latitude)
         st.session_state["map_center_longitude"] = float(map_center_longitude)
@@ -159,17 +156,18 @@ def render_map() -> None:
         control_scale=True,
     )
 
-    # Źródłem prawdy jest tabela (points_dataframe).
-    # Markery na mapie tworzymy z tabeli, a rysowane markery (Draw) synchronizujemy do tabeli.
+    editable_feature_group = folium.FeatureGroup(name="Punkty")
+    editable_feature_group.add_to(folium_map)
+
     for _, row in points_dataframe.iterrows():
         folium.Marker(
             location=[float(row["latitude"]), float(row["longitude"])],
             tooltip=f"Y={float(row['latitude']):.6f}, X={float(row['longitude']):.6f}",
-        ).add_to(folium_map)
+        ).add_to(editable_feature_group)
 
-    # Draw działa na mapie bez przypinania do FeatureGroup, bo wtedy all_drawings/st_folium bywają niespójne.
     Draw(
-        export=True,
+        export=False,
+        feature_group=editable_feature_group,
         draw_options={
             "polyline": False,
             "polygon": False,
@@ -229,11 +227,28 @@ def render_map() -> None:
         except Exception:
             pass
 
+    last_active_drawing = map_interaction.get("last_active_drawing")
     marker_positions = extract_marker_positions_from_drawings(map_interaction.get("all_drawings"))
+    marker_positions = sorted(marker_positions, key=lambda item: (float(item[0]), float(item[1])))
+
+    points_positions_signature = tuple(
+        sorted(
+            (
+                (round(float(row["longitude"]), 8), round(float(row["latitude"]), 8))
+                for _, row in ensure_points_dataframe(st.session_state["points_dataframe"]).iterrows()
+            ),
+            key=lambda item: (float(item[0]), float(item[1])),
+        )
+    )
+
+    if last_active_drawing is None and len(marker_positions) == 0:
+        if points_positions_signature != tuple(st.session_state.get("map_marker_positions_snapshot", ())):
+            st.session_state["map_marker_positions_snapshot"] = points_positions_signature
+        return
+
     marker_positions_signature = tuple((round(float(lon), 8), round(float(lat), 8)) for lon, lat in marker_positions)
 
-    # Gdy user doda/przesunie/usunie marker na mapie, synchronizujemy to do tabeli.
-    if marker_positions_signature != tuple(st.session_state.get("map_marker_positions_snapshot", ())) :
+    if marker_positions_signature != tuple(st.session_state.get("map_marker_positions_snapshot", ())):
         previous_df = ensure_points_dataframe(st.session_state["points_dataframe"])
         previous_sig = points_dataframe_signature(previous_df)
 
@@ -245,10 +260,20 @@ def render_map() -> None:
         )
 
         new_sig = points_dataframe_signature(synced_df)
-        st.session_state["map_marker_positions_snapshot"] = marker_positions_signature
+        st.session_state["points_dataframe"] = synced_df
+
+        updated_points_positions_signature = tuple(
+            sorted(
+                (
+                    (round(float(row["longitude"]), 8), round(float(row["latitude"]), 8))
+                    for _, row in ensure_points_dataframe(st.session_state["points_dataframe"]).iterrows()
+                ),
+                key=lambda item: (float(item[0]), float(item[1])),
+            )
+        )
+        st.session_state["map_marker_positions_snapshot"] = updated_points_positions_signature
 
         if new_sig != previous_sig:
-            st.session_state["points_dataframe"] = synced_df
             st.rerun()
 
 

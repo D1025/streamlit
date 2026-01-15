@@ -136,8 +136,6 @@ def append_point(points_dataframe: Optional[PointsDF], longitude: float, latitud
 
 
 def read_points_from_uploaded_file(uploaded_file) -> PointsDF:
-    # uploaded_file: Streamlit UploadedFile-like. Trzymamy to poza UI, ale bez
-    # zależności na streamlit.
     if uploaded_file is None:
         return pd.DataFrame(columns=["longitude", "latitude", "transport_rate", "mass"])
 
@@ -176,7 +174,6 @@ def get_map_center(points_dataframe: Optional[PointsDF], centroid_longitude: flo
     if abs(float(centroid_longitude)) > 1e-9 or abs(float(centroid_latitude)) > 1e-9:
         return float(centroid_longitude), float(centroid_latitude)
 
-    # Warszawa jako domyślna lokalizacja
     return 21.0122, 52.2297
 
 
