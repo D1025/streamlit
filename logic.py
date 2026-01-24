@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -52,6 +52,36 @@ class CentroidCalculator:
             euclidean_distance = math.sqrt((float(centroid_longitude) - float(longitude)) ** 2 + (float(centroid_latitude) - float(latitude)) ** 2)
             weighted_distance_sum += point_weight * euclidean_distance
         return float(weighted_distance_sum)
+
+
+@dataclass
+class CenterOfGravityDetails:
+    ensured_points_dataframe: PointsDF
+    centroid_longitude: float
+    centroid_latitude: float
+    total_weight: float
+    weighted_longitude_sum: float
+    weighted_latitude_sum: float
+    used_fallback_average: bool
+    weighted_distance_sum: float
+    per_point_breakdown_dataframe: PointsDF
+
+
+@dataclass
+class TopsisDetails:
+    ensured_points_dataframe: PointsDF
+    valid_criteria_columns: List[str]
+    decision_matrix: PointsDF
+    normalized_weights_by_column: Dict[str, float]
+    normalized_matrix: PointsDF
+    weighted_normalized_matrix: PointsDF
+    ideal_best_by_column: Dict[str, float]
+    ideal_worst_by_column: Dict[str, float]
+    distances_to_best: List[float]
+    distances_to_worst: List[float]
+    topsis_scores: List[float]
+    scored_dataframe: PointsDF
+    ranking_dataframe: PointsDF
 
 
 def normalize_column_names(input_dataframe: PointsDF) -> PointsDF:
@@ -183,6 +213,28 @@ def read_points_from_uploaded_file(uploaded_file) -> PointsDF:
     return ensure_points_dataframe(uploaded_dataframe, include_transport_rate_and_mass=False)
 
 
+def read_points_from_uploaded_file_with_status(uploaded_file) -> Tuple[PointsDF, str, str]:
+    if uploaded_file is None:
+        return pd.DataFrame(columns=["longitude", "latitude"]), "Nie wybrano pliku.", "info"
+
+    uploaded_name = str(getattr(uploaded_file, "name", "")).lower()
+    try:
+        if uploaded_name.endswith(".csv"):
+            uploaded_dataframe = pd.read_csv(uploaded_file)
+        elif uploaded_name.endswith(".xlsx") or uploaded_name.endswith(".xls"):
+            uploaded_dataframe = pd.read_excel(uploaded_file)
+        else:
+            uploaded_dataframe = pd.read_csv(uploaded_file)
+    except Exception:
+        return pd.DataFrame(columns=["longitude", "latitude"]), "Nie udało się wczytać pliku. Sprawdź format oraz czy plik nie jest uszkodzony.", "error"
+
+    ensured_points_dataframe = ensure_points_dataframe(uploaded_dataframe, include_transport_rate_and_mass=False)
+    if len(ensured_points_dataframe) == 0:
+        return ensured_points_dataframe, "Plik wczytany, ale nie znaleziono poprawnych współrzędnych. Upewnij się, że masz kolumny z długością i szerokością geograficzną.", "warning"
+
+    return ensured_points_dataframe, f"Wczytano punkty: {len(ensured_points_dataframe)}.", "success"
+
+
 def compute_center_of_gravity(points_dataframe: Optional[PointsDF]) -> Tuple[float, float, float]:
     ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=True)
 
@@ -193,6 +245,106 @@ def compute_center_of_gravity(points_dataframe: Optional[PointsDF]) -> Tuple[flo
     centroid_longitude, centroid_latitude = centroid_calculator.centroid()
     weighted_distance_sum = centroid_calculator.weighted_euclidean_distance_sum(centroid_longitude, centroid_latitude)
     return centroid_longitude, centroid_latitude, weighted_distance_sum
+
+
+def compute_center_of_gravity_details(points_dataframe: Optional[PointsDF]) -> CenterOfGravityDetails:
+    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=True).copy()
+
+    if len(ensured_points_dataframe) == 0:
+        empty_breakdown_dataframe = pd.DataFrame(
+            columns=[
+                "longitude",
+                "latitude",
+                "transport_rate",
+                "mass",
+                "point_weight",
+                "weighted_longitude",
+                "weighted_latitude",
+                "euclidean_distance",
+                "weighted_euclidean_distance",
+            ]
+        )
+        return CenterOfGravityDetails(
+            ensured_points_dataframe=ensured_points_dataframe,
+            centroid_longitude=0.0,
+            centroid_latitude=0.0,
+            total_weight=0.0,
+            weighted_longitude_sum=0.0,
+            weighted_latitude_sum=0.0,
+            used_fallback_average=False,
+            weighted_distance_sum=0.0,
+            per_point_breakdown_dataframe=empty_breakdown_dataframe,
+        )
+
+    point_weights: List[float] = []
+    weighted_longitudes: List[float] = []
+    weighted_latitudes: List[float] = []
+
+    total_weight = 0.0
+    weighted_longitude_sum = 0.0
+    weighted_latitude_sum = 0.0
+
+    for _, row in ensured_points_dataframe.iterrows():
+        point_weight = float(row["transport_rate"]) * float(row["mass"])
+        point_weights.append(float(point_weight))
+        weighted_longitudes.append(float(point_weight) * float(row["longitude"]))
+        weighted_latitudes.append(float(point_weight) * float(row["latitude"]))
+        total_weight += float(point_weight)
+        weighted_longitude_sum += float(point_weight) * float(row["longitude"])
+        weighted_latitude_sum += float(point_weight) * float(row["latitude"])
+
+    used_fallback_average = False
+    if abs(total_weight) < 1e-12:
+        used_fallback_average = True
+        centroid_longitude = float(ensured_points_dataframe["longitude"].astype(float).mean())
+        centroid_latitude = float(ensured_points_dataframe["latitude"].astype(float).mean())
+    else:
+        centroid_longitude = float(weighted_longitude_sum) / float(total_weight)
+        centroid_latitude = float(weighted_latitude_sum) / float(total_weight)
+
+    euclidean_distances: List[float] = []
+    weighted_euclidean_distances: List[float] = []
+    weighted_distance_sum = 0.0
+
+    for point_index, (_, row) in enumerate(ensured_points_dataframe.iterrows()):
+        euclidean_distance = math.sqrt((float(centroid_longitude) - float(row["longitude"])) ** 2 + (float(centroid_latitude) - float(row["latitude"])) ** 2)
+        weighted_euclidean_distance = float(point_weights[point_index]) * float(euclidean_distance)
+        euclidean_distances.append(float(euclidean_distance))
+        weighted_euclidean_distances.append(float(weighted_euclidean_distance))
+        weighted_distance_sum += float(weighted_euclidean_distance)
+
+    breakdown_dataframe = ensured_points_dataframe.copy()
+    breakdown_dataframe["point_weight"] = point_weights
+    breakdown_dataframe["weighted_longitude"] = weighted_longitudes
+    breakdown_dataframe["weighted_latitude"] = weighted_latitudes
+    breakdown_dataframe["euclidean_distance"] = euclidean_distances
+    breakdown_dataframe["weighted_euclidean_distance"] = weighted_euclidean_distances
+
+    breakdown_dataframe = breakdown_dataframe[
+        [
+            "longitude",
+            "latitude",
+            "transport_rate",
+            "mass",
+            "point_weight",
+            "weighted_longitude",
+            "weighted_latitude",
+            "euclidean_distance",
+            "weighted_euclidean_distance",
+        ]
+    ]
+
+    return CenterOfGravityDetails(
+        ensured_points_dataframe=ensured_points_dataframe,
+        centroid_longitude=float(centroid_longitude),
+        centroid_latitude=float(centroid_latitude),
+        total_weight=float(total_weight),
+        weighted_longitude_sum=float(weighted_longitude_sum),
+        weighted_latitude_sum=float(weighted_latitude_sum),
+        used_fallback_average=bool(used_fallback_average),
+        weighted_distance_sum=float(weighted_distance_sum),
+        per_point_breakdown_dataframe=breakdown_dataframe,
+    )
 
 
 def compute_point_distances(points_dataframe: Optional[PointsDF], centroid_longitude: float, centroid_latitude: float) -> PointsDF:
@@ -409,28 +561,62 @@ def get_topsis_candidate_criteria_columns(points_dataframe: Optional[PointsDF]) 
     return sorted(numeric_candidate_columns)
 
 
-def compute_topsis_ranking(
+def compute_topsis_details(
     points_dataframe: Optional[PointsDF],
     criteria_columns: Sequence[str],
     criteria_weights_by_name: Optional[Dict[str, float]] = None,
     criteria_impacts_by_name: Optional[Dict[str, str]] = None,
-) -> PointsDF:
+) -> TopsisDetails:
     ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False).copy()
     criteria_columns = [str(column_name).strip().lower() for column_name in criteria_columns if str(column_name).strip()]
 
-    if len(ensured_points_dataframe) == 0 or len(criteria_columns) == 0:
-        ensured_points_dataframe["topsis_score"] = []
-        ensured_points_dataframe["topsis_rank"] = []
-        return ensured_points_dataframe
+    ensured_points_dataframe = normalize_column_names(ensured_points_dataframe)
 
-    normalized_dataframe = normalize_column_names(ensured_points_dataframe)
-    ensured_points_dataframe = normalized_dataframe
+    empty_decision_matrix = pd.DataFrame()
+    empty_matrix = pd.DataFrame()
+    empty_scores: List[float] = []
+    empty_ranking = ensured_points_dataframe.copy()
+    empty_ranking["topsis_score"] = []
+    empty_ranking["topsis_rank"] = []
+
+    if len(ensured_points_dataframe) == 0 or len(criteria_columns) == 0:
+        return TopsisDetails(
+            ensured_points_dataframe=ensured_points_dataframe,
+            valid_criteria_columns=[],
+            decision_matrix=empty_decision_matrix,
+            normalized_weights_by_column={},
+            normalized_matrix=empty_matrix,
+            weighted_normalized_matrix=empty_matrix,
+            ideal_best_by_column={},
+            ideal_worst_by_column={},
+            distances_to_best=[],
+            distances_to_worst=[],
+            topsis_scores=empty_scores,
+            scored_dataframe=ensured_points_dataframe.copy(),
+            ranking_dataframe=empty_ranking,
+        )
 
     valid_criteria_columns = [column_name for column_name in criteria_columns if column_name in ensured_points_dataframe.columns]
     if len(valid_criteria_columns) == 0:
-        ensured_points_dataframe["topsis_score"] = 0.0
-        ensured_points_dataframe["topsis_rank"] = 1
-        return ensured_points_dataframe
+        scored_dataframe = ensured_points_dataframe.copy()
+        scored_dataframe["topsis_score"] = 0.0
+        ranking_dataframe = scored_dataframe.sort_values(by=["topsis_score"], ascending=False).reset_index(drop=True)
+        ranking_dataframe["topsis_rank"] = list(range(1, len(ranking_dataframe) + 1))
+        return TopsisDetails(
+            ensured_points_dataframe=ensured_points_dataframe,
+            valid_criteria_columns=[],
+            decision_matrix=empty_decision_matrix,
+            normalized_weights_by_column={},
+            normalized_matrix=empty_matrix,
+            weighted_normalized_matrix=empty_matrix,
+            ideal_best_by_column={},
+            ideal_worst_by_column={},
+            distances_to_best=[],
+            distances_to_worst=[],
+            topsis_scores=[0.0 for _ in range(len(scored_dataframe))],
+            scored_dataframe=scored_dataframe,
+            ranking_dataframe=ranking_dataframe,
+        )
 
     weights_by_name: Dict[str, float] = {}
     if criteria_weights_by_name:
@@ -451,6 +637,10 @@ def compute_topsis_ranking(
         normalized_weights = [1.0 / float(len(valid_criteria_columns)) for _ in valid_criteria_columns]
     else:
         normalized_weights = [float(weight_value) / total_weight for weight_value in raw_weights]
+
+    normalized_weights_by_column: Dict[str, float] = {}
+    for column_index, column_name in enumerate(valid_criteria_columns):
+        normalized_weights_by_column[str(column_name)] = float(normalized_weights[column_index])
 
     normalized_matrix = decision_matrix.copy()
     for column_name in valid_criteria_columns:
@@ -499,7 +689,46 @@ def compute_topsis_ranking(
         else:
             topsis_scores.append(float(worst_distance) / denominator)
 
-    ensured_points_dataframe["topsis_score"] = topsis_scores
-    ensured_points_dataframe = ensured_points_dataframe.sort_values(by=["topsis_score"], ascending=False).reset_index(drop=True)
-    ensured_points_dataframe["topsis_rank"] = list(range(1, len(ensured_points_dataframe) + 1))
-    return ensured_points_dataframe
+    scored_dataframe = ensured_points_dataframe.copy()
+    scored_dataframe["topsis_score"] = topsis_scores
+
+    ranking_dataframe = scored_dataframe.sort_values(by=["topsis_score"], ascending=False).reset_index(drop=True)
+    ranking_dataframe["topsis_rank"] = list(range(1, len(ranking_dataframe) + 1))
+
+    return TopsisDetails(
+        ensured_points_dataframe=ensured_points_dataframe,
+        valid_criteria_columns=list(valid_criteria_columns),
+        decision_matrix=decision_matrix,
+        normalized_weights_by_column=normalized_weights_by_column,
+        normalized_matrix=normalized_matrix,
+        weighted_normalized_matrix=weighted_normalized_matrix,
+        ideal_best_by_column=ideal_best_by_column,
+        ideal_worst_by_column=ideal_worst_by_column,
+        distances_to_best=distances_to_best,
+        distances_to_worst=distances_to_worst,
+        topsis_scores=topsis_scores,
+        scored_dataframe=scored_dataframe,
+        ranking_dataframe=ranking_dataframe,
+    )
+
+
+def compute_topsis_ranking(
+    points_dataframe: Optional[PointsDF],
+    criteria_columns: Sequence[str],
+    criteria_weights_by_name: Optional[Dict[str, float]] = None,
+    criteria_impacts_by_name: Optional[Dict[str, str]] = None,
+) -> PointsDF:
+    topsis_details = compute_topsis_details(
+        points_dataframe,
+        criteria_columns=criteria_columns,
+        criteria_weights_by_name=criteria_weights_by_name,
+        criteria_impacts_by_name=criteria_impacts_by_name,
+    )
+
+    if len(topsis_details.ranking_dataframe) == 0:
+        ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False).copy()
+        ensured_points_dataframe["topsis_score"] = []
+        ensured_points_dataframe["topsis_rank"] = []
+        return ensured_points_dataframe
+
+    return topsis_details.ranking_dataframe
