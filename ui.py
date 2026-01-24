@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 import folium
+from folium.plugins import Draw
 from streamlit_folium import st_folium
 
 from logic import (
@@ -12,10 +13,12 @@ from logic import (
     compute_center_of_gravity_details,
     compute_topsis_details,
     ensure_points_dataframe,
+    extract_marker_positions_from_drawings,
     get_map_center,
     get_topsis_candidate_criteria_columns,
     points_dataframe_signature,
     read_points_from_uploaded_file_with_status,
+    synchronize_points_dataframe_with_marker_positions,
 )
 
 
@@ -59,14 +62,11 @@ def init_session_state() -> None:
     if "map_zoom_level" not in st.session_state:
         st.session_state["map_zoom_level"] = 11
 
+    if "map_marker_positions_snapshot" not in st.session_state:
+        st.session_state["map_marker_positions_snapshot"] = ()
+
     if "interactive_folium_map_key_version" not in st.session_state:
         st.session_state["interactive_folium_map_key_version"] = 0
-
-    if "map_last_clicked_latitude" not in st.session_state:
-        st.session_state["map_last_clicked_latitude"] = None
-
-    if "map_last_clicked_longitude" not in st.session_state:
-        st.session_state["map_last_clicked_longitude"] = None
 
 
 def get_interactive_folium_map_key() -> str:
@@ -100,6 +100,7 @@ def render_sidebar_menu() -> Tuple[str, str, bool]:
 
         if str(calculation_method) != str(st.session_state.get("calculation_method")):
             st.session_state["calculation_method"] = str(calculation_method)
+            st.session_state["map_marker_positions_snapshot"] = ()
             bump_interactive_folium_map_key()
 
         guided_mode = st.toggle(
@@ -120,7 +121,8 @@ def render_context_help_in_sidebar(active_page: str, calculation_method: str, gu
     st.subheader("Pomoc kontekstowa")
 
     if active_page == "Obliczenia":
-        st.write("Mapa: kliknij, aby wskazać współrzędne. Potem dodaj punkt przyciskiem w sekcji danych.")
+        st.write("Mapa: dodawaj punkt narzędziem markera, edytuj w trybie Edytuj, usuwaj w trybie Usuń.")
+        st.write("Punkty dodane na mapie od razu trafiają do tabeli po lewej.")
         if calculation_method == "Środek ciężkości":
             st.write("Wymagane: współrzędne (X, Y). Zalecane: stawka transportowa i masa, bo tworzą wagę punktu.")
         else:
@@ -162,7 +164,14 @@ def render_help_page() -> None:
     st.subheader("Najczęstsze problemy")
     st.write("1) Brak wyniku: upewnij się, że masz co najmniej jeden punkt, a dla TOPSIS co najmniej jedno kryterium.")
     st.write("2) Plik wczytuje się, ale nie ma punktów: sprawdź, czy w pliku są kolumny z długością i szerokością geograficzną.")
-    st.write("3) Punkt z mapy nie dodaje się: kliknij w mapę, potem użyj przycisku „Dodaj punkt z mapy” w sekcji danych.")
+    st.write("3) Punkt z mapy nie dodaje się: wybierz narzędzie markera i kliknij na mapie. Punkt pojawi się w tabeli automatycznie.")
+
+    st.divider()
+
+    st.subheader("Mapa")
+    st.write("Dodawanie punktu: wybierz narzędzie markera i kliknij na mapie.")
+    st.write("Edycja punktu: wybierz tryb Edytuj i przeciągnij marker w nowe miejsce.")
+    st.write("Usuwanie punktu: wybierz tryb Usuń i kliknij marker.")
 
     st.divider()
 
@@ -170,11 +179,6 @@ def render_help_page() -> None:
     st.write("Współrzędne: długość geograficzna (X) i szerokość geograficzna (Y).")
     st.write("Środek ciężkości: możesz dodać stawkę transportową i masę. Jeśli ich nie podasz, przyjmujemy wartości 1.")
     st.write("TOPSIS: dodaj własne kryteria liczbowe. Dla każdego ustaw wagę oraz typ (korzyść/koszt).")
-
-    st.divider()
-
-    st.subheader("Czytelna interpretacja")
-    st.write("Jeśli włączysz tryb prowadzenia, zobaczysz dokładne kroki obliczeń, tabele pośrednie i wyjaśnienie wzorów.")
 
 
 def update_topsis_state_for_available_criteria(available_criteria_columns: List[str]) -> None:
@@ -288,23 +292,24 @@ def render_onboarding(calculation_method: str, guided_mode: bool) -> None:
     if calculation_method != "TOPSIS" and step_has_points:
         completed_steps += 1
 
-    step_count = 2 if calculation_method == "TOPSIS" else 2
+    step_count = 2
     progress_value = float(completed_steps) / float(step_count) if step_count > 0 else 0.0
 
     st.subheader("Przewodnik: co teraz zrobić")
     st.progress(progress_value)
+
     if not step_has_points:
-        st.info("Krok 1: dodaj punkty. Możesz je wczytać z pliku, dodać ręcznie albo kliknąć na mapie i dodać przyciskiem.")
+        st.info("Krok 1: dodaj punkty. Możesz je wczytać z pliku, dodać ręcznie albo dodać na mapie narzędziem markera.")
         return
 
     if calculation_method == "TOPSIS" and not step_has_topsis_criteria:
-        st.info("Krok 2: wybierz kryteria TOPSIS. Zaznacz przynajmniej jedno kryterium w sekcji konfiguracji.")
+        st.info("Krok 2: wybierz kryteria TOPSIS. Zaznacz przynajmniej jedno kryterium w sekcji wyboru kryteriów.")
         return
 
-    st.success("Masz komplet minimum danych. Przejdź do sekcji „Wynik”, aby zobaczyć rezultat i wyjaśnienie obliczeń.")
+    st.success("Masz komplet minimum danych. Przejdź do sekcji „Wynik i wyjaśnienie”, aby zobaczyć rezultat.")
 
 
-def render_file_import_section(calculation_method: str) -> None:
+def render_file_import_section() -> None:
     st.subheader("Wczytanie danych z pliku")
 
     uploaded_file = st.file_uploader(
@@ -314,7 +319,7 @@ def render_file_import_section(calculation_method: str) -> None:
     )
 
     if uploaded_file is None:
-        st.caption("Jeśli nie masz pliku, możesz dodać punkty ręcznie lub z mapy.")
+        st.caption("Jeśli nie masz pliku, możesz dodać punkty ręcznie albo na mapie.")
         return
 
     uploaded_points_dataframe, message_text, message_level = read_points_from_uploaded_file_with_status(uploaded_file)
@@ -329,116 +334,222 @@ def render_file_import_section(calculation_method: str) -> None:
 
     if len(uploaded_points_dataframe) > 0:
         st.session_state["points_dataframe"] = uploaded_points_dataframe
+        st.session_state["map_marker_positions_snapshot"] = ()
         bump_interactive_folium_map_key()
 
 
-def render_add_point_from_map_section(calculation_method: str) -> None:
-    st.subheader("Dodanie punktu na podstawie kliknięcia na mapie")
+def render_map_defaults_section(calculation_method: str) -> None:
+    st.subheader("Punkty dodawane z mapy: domyślne wartości")
 
     if calculation_method == "TOPSIS":
-        st.write("W tym miejscu ustawiasz domyślne wartości kryteriów, które zostaną wpisane automatycznie, gdy dodasz punkt z mapy.")
-        st.write("Dzięki temu nie musisz od razu uzupełniać całej tabeli, a później możesz doprecyzować wartości ręcznie.")
+        st.write("Gdy dodasz marker na mapie, aplikacja utworzy nowy wiersz w tabeli.")
+        st.write("Poniższe wartości zostaną wpisane automatycznie do kryteriów dla nowego punktu.")
+        st.write("Jeśli później zmienisz te wartości, nie zmieni to punktów już dodanych — to są ustawienia tylko dla kolejnych markerów.")
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
         available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
         update_topsis_state_for_available_criteria(available_criteria_columns)
-
         selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        if len(selected_criteria_columns) == 0:
-            st.info("Nie widzę jeszcze kryteriów TOPSIS. Dodaj kryterium i wybierz je do obliczeń, wtedy pojawią się domyślne wartości.")
-        else:
-            st.caption("Domyślne wartości będą użyte tylko przy dodawaniu punktu z mapy. Punkty wpisywane ręcznie możesz uzupełniać niezależnie.")
-            current_default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
-            updated_default_values_by_criteria: Dict[str, float] = dict(current_default_values_by_criteria)
 
-            for criterion_name in selected_criteria_columns:
-                updated_default_values_by_criteria[criterion_name] = st.number_input(
-                    f"Domyślna wartość kryterium: {criterion_name}",
-                    value=float(current_default_values_by_criteria.get(criterion_name, 1.0)),
-                    format="%.6f",
-                    help="Ta wartość zostanie wpisana w nowym punkcie dodanym z mapy. Później możesz ją zmienić w tabeli.",
-                    key=f"topsis_map_default_{criterion_name}",
+        if len(selected_criteria_columns) == 0:
+            st.info("Najpierw dodaj kryterium i wybierz je do obliczeń, wtedy pojawią się tutaj domyślne wartości.")
+            return
+
+        current_default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+        updated_default_values_by_criteria: Dict[str, float] = dict(current_default_values_by_criteria)
+
+        for criterion_name in selected_criteria_columns:
+            updated_default_values_by_criteria[criterion_name] = st.number_input(
+                f"Domyślna wartość kryterium: {criterion_name}",
+                value=float(current_default_values_by_criteria.get(criterion_name, 1.0)),
+                format="%.6f",
+                help="Ta wartość zostanie wpisana w nowym punkcie dodanym na mapie. Później możesz ją zmienić w tabeli.",
+                key=f"topsis_map_default_{criterion_name}",
+            )
+
+        st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in updated_default_values_by_criteria.items()}
+        return
+
+    st.write("Gdy dodasz marker na mapie, aplikacja utworzy nowy wiersz w tabeli.")
+    st.write("Poniższe wartości zostaną wpisane automatycznie do stawki transportowej i masy dla nowego punktu.")
+    st.write("Jeśli później zmienisz te wartości, nie zmieni to punktów już dodanych — to są ustawienia tylko dla kolejnych markerów.")
+
+    st.session_state["map_default_transport_rate"] = st.number_input(
+        "Domyślna stawka transportowa",
+        value=float(st.session_state.get("map_default_transport_rate", 1.0)),
+        min_value=0.0,
+        format="%.6f",
+        help="Ta wartość zostanie użyta, gdy dodasz punkt na mapie. Wagę punktu liczymy jako stawka transportowa × masa.",
+        key="map_default_transport_rate_input",
+    )
+    st.session_state["map_default_mass"] = st.number_input(
+        "Domyślna masa",
+        value=float(st.session_state.get("map_default_mass", 1.0)),
+        min_value=0.0,
+        format="%.6f",
+        help="Ta wartość zostanie użyta, gdy dodasz punkt na mapie. Wagę punktu liczymy jako stawka transportowa × masa.",
+        key="map_default_mass_input",
+    )
+
+
+def build_default_values_by_column_for_map(calculation_method: str, points_dataframe: pd.DataFrame) -> Dict[str, float]:
+    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False)
+    default_values_by_column: Dict[str, float] = {}
+
+    non_coordinate_columns = [column_name for column_name in ensured_points_dataframe.columns if column_name not in ("longitude", "latitude")]
+
+    if calculation_method == "TOPSIS":
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+        default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+        for column_name in non_coordinate_columns:
+            normalized_column_name = str(column_name).strip().lower()
+            if normalized_column_name in selected_criteria_columns:
+                default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
+            else:
+                default_values_by_column[normalized_column_name] = 1.0
+        return default_values_by_column
+
+    default_values_by_column["transport_rate"] = float(st.session_state.get("map_default_transport_rate", 1.0))
+    default_values_by_column["mass"] = float(st.session_state.get("map_default_mass", 1.0))
+    return default_values_by_column
+
+
+def compute_result_marker_for_map(calculation_method: str, points_dataframe: pd.DataFrame) -> Tuple[float, float, str]:
+    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False)
+
+    if calculation_method == "TOPSIS":
+        available_criteria_columns = get_topsis_candidate_criteria_columns(ensured_points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+        if len(ensured_points_dataframe) == 0 or len(selected_criteria_columns) == 0:
+            return 0.0, 0.0, ""
+        topsis_details = compute_topsis_details(
+            ensured_points_dataframe,
+            criteria_columns=selected_criteria_columns,
+            criteria_weights_by_name=st.session_state.get("topsis_criteria_weights", {}),
+            criteria_impacts_by_name=st.session_state.get("topsis_criteria_impacts", {}),
+        )
+        if len(topsis_details.ranking_dataframe) == 0:
+            return 0.0, 0.0, ""
+        best_row = topsis_details.ranking_dataframe.iloc[0]
+        best_longitude = float(best_row.get("longitude", 0.0))
+        best_latitude = float(best_row.get("latitude", 0.0))
+        best_score = float(best_row.get("topsis_score", 0.0))
+        tooltip_text = f"Najlepszy punkt TOPSIS: wynik={best_score:.6f}, Y={best_latitude:.6f}, X={best_longitude:.6f}"
+        return best_longitude, best_latitude, tooltip_text
+
+    center_of_gravity_details = compute_center_of_gravity_details(ensure_points_dataframe(ensured_points_dataframe, include_transport_rate_and_mass=True))
+    tooltip_text = f"Wynik środka ciężkości: Y={float(center_of_gravity_details.centroid_latitude):.6f}, X={float(center_of_gravity_details.centroid_longitude):.6f}"
+    return float(center_of_gravity_details.centroid_longitude), float(center_of_gravity_details.centroid_latitude), tooltip_text
+
+
+def render_map(calculation_method: str, guided_mode: bool) -> None:
+    current_map_key = get_interactive_folium_map_key()
+    previous_map_interaction = st.session_state.get(current_map_key)
+
+    if isinstance(previous_map_interaction, dict):
+        returned_center = previous_map_interaction.get("center")
+        returned_zoom = previous_map_interaction.get("zoom")
+
+        if isinstance(returned_center, dict) and "lat" in returned_center and "lng" in returned_center:
+            try:
+                st.session_state["map_center_latitude"] = float(returned_center["lat"])
+                st.session_state["map_center_longitude"] = float(returned_center["lng"])
+            except Exception:
+                pass
+
+        if returned_zoom is not None:
+            try:
+                st.session_state["map_zoom_level"] = int(returned_zoom)
+            except Exception:
+                pass
+
+        last_active_drawing = previous_map_interaction.get("last_active_drawing")
+        if isinstance(last_active_drawing, dict):
+            marker_positions = extract_marker_positions_from_drawings(previous_map_interaction.get("all_drawings"))
+            marker_positions_signature = tuple((round(float(longitude_value), 8), round(float(latitude_value), 8)) for longitude_value, latitude_value in marker_positions)
+
+            previous_snapshot = tuple(st.session_state.get("map_marker_positions_snapshot", ()))
+            if marker_positions_signature != previous_snapshot:
+                current_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+                default_values_by_column = build_default_values_by_column_for_map(calculation_method, current_points_dataframe)
+
+                synchronized_points_dataframe = synchronize_points_dataframe_with_marker_positions(
+                    current_points_dataframe,
+                    marker_positions,
+                    default_values_by_column=default_values_by_column,
                 )
 
-            st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in updated_default_values_by_criteria.items()}
+                st.session_state["points_dataframe"] = synchronized_points_dataframe
+                st.session_state["map_marker_positions_snapshot"] = marker_positions_signature
+
+    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+
+    result_longitude, result_latitude, result_tooltip_text = compute_result_marker_for_map(calculation_method, points_dataframe)
+
+    map_center_longitude, map_center_latitude = get_map_center(points_dataframe, result_longitude, result_latitude)
+
+    if "map_center_latitude" not in st.session_state or "map_center_longitude" not in st.session_state:
+        st.session_state["map_center_latitude"] = float(map_center_latitude)
+        st.session_state["map_center_longitude"] = float(map_center_longitude)
+
+    if "map_zoom_level" not in st.session_state:
+        st.session_state["map_zoom_level"] = 11
+
+    st.subheader("Mapa")
+    if guided_mode:
+        st.caption("Dodawanie: narzędzie markera. Edycja: tryb Edytuj. Usuwanie: tryb Usuń. Zmiany z mapy od razu aktualizują tabelę.")
     else:
-        st.write("W tym miejscu ustawiasz domyślne wartości stawki transportowej i masy, które zostaną wpisane automatycznie, gdy dodasz punkt z mapy.")
-        st.write("To przyspiesza pracę: najpierw dodajesz punkty, a potem ewentualnie dopracowujesz dane w tabeli.")
+        st.caption("Dodawanie: narzędzie markera. Edycja: tryb Edytuj. Usuwanie: tryb Usuń.")
 
-        st.session_state["map_default_transport_rate"] = st.number_input(
-            "Domyślna stawka transportowa",
-            value=float(st.session_state.get("map_default_transport_rate", 1.0)),
-            min_value=0.0,
-            format="%.6f",
-            help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy. Wagę punktu liczymy jako stawka transportowa × masa.",
-            key="centroid_map_default_transport_rate",
-        )
-        st.session_state["map_default_mass"] = st.number_input(
-            "Domyślna masa",
-            value=float(st.session_state.get("map_default_mass", 1.0)),
-            min_value=0.0,
-            format="%.6f",
-            help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy. Wagę punktu liczymy jako stawka transportowa × masa.",
-            key="centroid_map_default_mass",
-        )
+    folium_map = folium.Map(
+        location=[float(st.session_state["map_center_latitude"]), float(st.session_state["map_center_longitude"])],
+        zoom_start=int(st.session_state["map_zoom_level"]),
+        control_scale=True,
+    )
 
-    last_clicked_longitude = st.session_state.get("map_last_clicked_longitude")
-    last_clicked_latitude = st.session_state.get("map_last_clicked_latitude")
+    editable_feature_group = folium.FeatureGroup(name="Punkty")
+    editable_feature_group.add_to(folium_map)
 
-    if last_clicked_longitude is None or last_clicked_latitude is None:
-        st.info("Kliknij na mapie po prawej stronie, aby wybrać miejsce. Potem wróć tutaj i dodaj punkt.")
-        return
+    for _, row in points_dataframe.iterrows():
+        folium.Marker(
+            location=[float(row["latitude"]), float(row["longitude"])],
+            tooltip=f"Punkt: Y={float(row['latitude']):.6f}, X={float(row['longitude']):.6f}",
+        ).add_to(editable_feature_group)
 
-    st.write(f"Wybrane współrzędne z mapy: X={float(last_clicked_longitude):.6f}, Y={float(last_clicked_latitude):.6f}")
+    Draw(
+        export=False,
+        feature_group=editable_feature_group,
+        draw_options={
+            "polyline": False,
+            "polygon": False,
+            "rectangle": False,
+            "circle": False,
+            "circlemarker": False,
+            "marker": True,
+        },
+        edit_options={
+            "edit": True,
+            "remove": True,
+        },
+    ).add_to(folium_map)
 
-    if calculation_method == "TOPSIS":
-        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
-        update_topsis_state_for_available_criteria(available_criteria_columns)
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+    if len(points_dataframe) > 0 and (abs(float(result_longitude)) > 1e-12 or abs(float(result_latitude)) > 1e-12):
+        folium.Marker(
+            location=[float(result_latitude), float(result_longitude)],
+            tooltip=result_tooltip_text,
+            icon=folium.Icon(color="red"),
+        ).add_to(folium_map)
 
-        additional_columns_values: Dict[str, float] = {}
-        for criterion_name in selected_criteria_columns:
-            additional_columns_values[str(criterion_name).strip().lower()] = float(default_values_by_criteria.get(str(criterion_name).strip().lower(), 1.0))
-
-        if st.button(
-            "Dodaj punkt z mapy do tabeli",
-            use_container_width=True,
-            help="Doda punkt do tabeli z domyślnymi wartościami kryteriów TOPSIS.",
-            key="add_point_from_map_topsis_button",
-        ):
-            st.session_state["points_dataframe"] = append_point(
-                st.session_state["points_dataframe"],
-                float(last_clicked_longitude),
-                float(last_clicked_latitude),
-                transport_rate=None,
-                mass=None,
-                additional_columns_values=additional_columns_values,
-            )
-            st.success("Dodano punkt z mapy.")
-            bump_interactive_folium_map_key()
-        return
-
-    default_transport_rate = float(st.session_state.get("map_default_transport_rate", 1.0))
-    default_mass = float(st.session_state.get("map_default_mass", 1.0))
-
-    if st.button(
-        "Dodaj punkt z mapy do tabeli",
+    st_folium(
+        folium_map,
+        height=600,
         use_container_width=True,
-        help="Doda punkt do tabeli z domyślną stawką transportową i masą.",
-        key="add_point_from_map_centroid_button",
-    ):
-        st.session_state["points_dataframe"] = append_point(
-            st.session_state["points_dataframe"],
-            float(last_clicked_longitude),
-            float(last_clicked_latitude),
-            transport_rate=float(default_transport_rate),
-            mass=float(default_mass),
-            additional_columns_values=None,
-        )
-        st.success("Dodano punkt z mapy.")
-        bump_interactive_folium_map_key()
+        key=current_map_key,
+        returned_objects=["all_drawings", "last_active_drawing", "center", "zoom"],
+        center=[float(st.session_state["map_center_latitude"]), float(st.session_state["map_center_longitude"])],
+        zoom=int(st.session_state["map_zoom_level"]),
+    )
 
 
 def render_centroid_controls(guided_mode: bool) -> None:
@@ -451,12 +562,16 @@ def render_centroid_controls(guided_mode: bool) -> None:
             st.latex(r"w_i = ST_i \cdot M_i")
             st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
 
-    render_file_import_section("Środek ciężkości")
+    render_file_import_section()
+
+    st.divider()
+    render_map_defaults_section("Środek ciężkości")
 
     points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
 
+    st.divider()
     st.subheader("Tabela punktów")
-    st.caption("Możesz edytować wartości w tabeli. Jeśli dopiszesz nowe wiersze, będą one traktowane jako nowe punkty.")
+    st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
 
     data_editor_function = getattr(st, "data_editor", None)
     display_dataframe = points_dataframe.copy()
@@ -478,12 +593,10 @@ def render_centroid_controls(guided_mode: bool) -> None:
                 full_points_dataframe[column_name] = edited_display_dataframe[column_name]
             st.session_state["points_dataframe"] = full_points_dataframe
             st.success("Zapisano zmiany w tabeli.")
+            st.session_state["map_marker_positions_snapshot"] = ()
             bump_interactive_folium_map_key()
     else:
         st.dataframe(display_dataframe, use_container_width=True)
-
-    st.divider()
-    render_add_point_from_map_section("Środek ciężkości")
 
     st.divider()
     st.subheader("Dodaj punkt ręcznie")
@@ -535,6 +648,7 @@ def render_centroid_controls(guided_mode: bool) -> None:
             additional_columns_values=None,
         )
         st.success("Dodano punkt.")
+        st.session_state["map_marker_positions_snapshot"] = ()
         bump_interactive_folium_map_key()
 
     st.divider()
@@ -597,8 +711,7 @@ def render_centroid_controls(guided_mode: bool) -> None:
         key="centroid_clear_points_button",
     ):
         st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude", "transport_rate", "mass"])
-        st.session_state["map_last_clicked_latitude"] = None
-        st.session_state["map_last_clicked_longitude"] = None
+        st.session_state["map_marker_positions_snapshot"] = ()
         st.success("Wyczyszczono dane.")
         bump_interactive_folium_map_key()
 
@@ -615,7 +728,7 @@ def render_topsis_controls(guided_mode: bool) -> None:
             st.write("• Koszt: mniejsza wartość jest lepsza")
             st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
 
-    render_file_import_section("TOPSIS")
+    render_file_import_section()
 
     points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
 
@@ -649,6 +762,7 @@ def render_topsis_controls(guided_mode: bool) -> None:
                 updated_points_dataframe[normalized_criterion_column_name] = float(criterion_default_value)
                 st.session_state["points_dataframe"] = updated_points_dataframe
                 st.success("Dodano kryterium.")
+                st.session_state["map_marker_positions_snapshot"] = ()
                 bump_interactive_folium_map_key()
             else:
                 st.warning("Takie kryterium już istnieje.")
@@ -676,7 +790,6 @@ def render_topsis_controls(guided_mode: bool) -> None:
     selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
     criteria_weights: Dict[str, float] = dict(st.session_state.get("topsis_criteria_weights", {}))
     criteria_impacts: Dict[str, str] = dict(st.session_state.get("topsis_criteria_impacts", {}))
-    default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
 
     st.divider()
     st.subheader("Konfiguracja kryteriów")
@@ -709,10 +822,13 @@ def render_topsis_controls(guided_mode: bool) -> None:
 
     st.session_state["topsis_criteria_weights"] = {str(key).strip().lower(): float(value) for key, value in criteria_weights.items()}
     st.session_state["topsis_criteria_impacts"] = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts.items()}
-    st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in default_values_by_criteria.items()}
+
+    st.divider()
+    render_map_defaults_section("TOPSIS")
 
     st.divider()
     st.subheader("Tabela punktów (alternatywy)")
+    st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
 
     data_editor_function = getattr(st, "data_editor", None)
     if data_editor_function is not None:
@@ -728,13 +844,11 @@ def render_topsis_controls(guided_mode: bool) -> None:
         if edited_signature != previous_signature:
             st.session_state["points_dataframe"] = edited_points_dataframe
             st.success("Zapisano zmiany w tabeli.")
+            st.session_state["map_marker_positions_snapshot"] = ()
             bump_interactive_folium_map_key()
             points_dataframe = edited_points_dataframe
     else:
         st.dataframe(points_dataframe, use_container_width=True)
-
-    st.divider()
-    render_add_point_from_map_section("TOPSIS")
 
     st.divider()
     st.subheader("Dodaj punkt ręcznie")
@@ -781,6 +895,7 @@ def render_topsis_controls(guided_mode: bool) -> None:
             additional_columns_values=manual_criteria_values,
         )
         st.success("Dodano punkt.")
+        st.session_state["map_marker_positions_snapshot"] = ()
         bump_interactive_folium_map_key()
 
     st.divider()
@@ -887,134 +1002,9 @@ def render_topsis_controls(guided_mode: bool) -> None:
         st.session_state["topsis_criteria_weights"] = {}
         st.session_state["topsis_criteria_impacts"] = {}
         st.session_state["topsis_default_values_by_criteria"] = {}
-        st.session_state["map_last_clicked_latitude"] = None
-        st.session_state["map_last_clicked_longitude"] = None
+        st.session_state["map_marker_positions_snapshot"] = ()
         st.success("Wyczyszczono dane.")
         bump_interactive_folium_map_key()
-
-
-def compute_result_marker_for_map(calculation_method: str, points_dataframe: pd.DataFrame) -> Tuple[float, float, str]:
-    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False)
-
-    if calculation_method == "TOPSIS":
-        available_criteria_columns = get_topsis_candidate_criteria_columns(ensured_points_dataframe)
-        update_topsis_state_for_available_criteria(available_criteria_columns)
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        if len(ensured_points_dataframe) == 0 or len(selected_criteria_columns) == 0:
-            return 0.0, 0.0, ""
-        topsis_details = compute_topsis_details(
-            ensured_points_dataframe,
-            criteria_columns=selected_criteria_columns,
-            criteria_weights_by_name=st.session_state.get("topsis_criteria_weights", {}),
-            criteria_impacts_by_name=st.session_state.get("topsis_criteria_impacts", {}),
-        )
-        if len(topsis_details.ranking_dataframe) == 0:
-            return 0.0, 0.0, ""
-        best_row = topsis_details.ranking_dataframe.iloc[0]
-        best_longitude = float(best_row.get("longitude", 0.0))
-        best_latitude = float(best_row.get("latitude", 0.0))
-        best_score = float(best_row.get("topsis_score", 0.0))
-        tooltip_text = f"Najlepszy punkt TOPSIS: wynik={best_score:.6f}, Y={best_latitude:.6f}, X={best_longitude:.6f}"
-        return best_longitude, best_latitude, tooltip_text
-
-    center_of_gravity_details = compute_center_of_gravity_details(ensure_points_dataframe(ensured_points_dataframe, include_transport_rate_and_mass=True))
-    tooltip_text = f"Wynik środka ciężkości: Y={float(center_of_gravity_details.centroid_latitude):.6f}, X={float(center_of_gravity_details.centroid_longitude):.6f}"
-    return float(center_of_gravity_details.centroid_longitude), float(center_of_gravity_details.centroid_latitude), tooltip_text
-
-
-def render_map(calculation_method: str, guided_mode: bool) -> None:
-    current_map_key = get_interactive_folium_map_key()
-    previous_map_interaction = st.session_state.get(current_map_key)
-
-    if isinstance(previous_map_interaction, dict):
-        returned_center = previous_map_interaction.get("center")
-        returned_zoom = previous_map_interaction.get("zoom")
-        returned_last_clicked = previous_map_interaction.get("last_clicked")
-
-        if isinstance(returned_center, dict) and "lat" in returned_center and "lng" in returned_center:
-            try:
-                st.session_state["map_center_latitude"] = float(returned_center["lat"])
-                st.session_state["map_center_longitude"] = float(returned_center["lng"])
-            except Exception:
-                pass
-
-        if returned_zoom is not None:
-            try:
-                st.session_state["map_zoom_level"] = int(returned_zoom)
-            except Exception:
-                pass
-
-        if isinstance(returned_last_clicked, dict) and "lat" in returned_last_clicked and "lng" in returned_last_clicked:
-            try:
-                st.session_state["map_last_clicked_latitude"] = float(returned_last_clicked["lat"])
-                st.session_state["map_last_clicked_longitude"] = float(returned_last_clicked["lng"])
-            except Exception:
-                pass
-
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
-    result_longitude, result_latitude, result_tooltip_text = compute_result_marker_for_map(calculation_method, points_dataframe)
-
-    map_center_longitude, map_center_latitude = get_map_center(points_dataframe, result_longitude, result_latitude)
-
-    if "map_center_latitude" not in st.session_state or "map_center_longitude" not in st.session_state:
-        st.session_state["map_center_latitude"] = float(map_center_latitude)
-        st.session_state["map_center_longitude"] = float(map_center_longitude)
-
-    if "map_zoom_level" not in st.session_state:
-        st.session_state["map_zoom_level"] = 11
-
-    st.subheader("Mapa")
-    if guided_mode:
-        st.caption("Kliknij na mapie, aby wskazać współrzędne nowego punktu. Następnie dodaj go przyciskiem w sekcji danych po lewej stronie.")
-    else:
-        st.caption("Kliknij na mapie, aby wskazać współrzędne nowego punktu.")
-
-    folium_map = folium.Map(
-        location=[float(st.session_state["map_center_latitude"]), float(st.session_state["map_center_longitude"])],
-        zoom_start=int(st.session_state["map_zoom_level"]),
-        control_scale=True,
-        tiles=None,
-    )
-
-    folium.TileLayer(
-        tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attr="© autorzy OpenStreetMap",
-        name="Mapa bazowa",
-        control=False,
-    ).add_to(folium_map)
-
-    for _, row in points_dataframe.iterrows():
-        folium.Marker(
-            location=[float(row["latitude"]), float(row["longitude"])],
-            tooltip=f"Punkt: Y={float(row['latitude']):.6f}, X={float(row['longitude']):.6f}",
-        ).add_to(folium_map)
-
-    if len(points_dataframe) > 0 and (abs(float(result_longitude)) > 1e-12 or abs(float(result_latitude)) > 1e-12):
-        folium.Marker(
-            location=[float(result_latitude), float(result_longitude)],
-            tooltip=result_tooltip_text,
-            icon=folium.Icon(color="red"),
-        ).add_to(folium_map)
-
-    last_clicked_latitude = st.session_state.get("map_last_clicked_latitude")
-    last_clicked_longitude = st.session_state.get("map_last_clicked_longitude")
-    if last_clicked_latitude is not None and last_clicked_longitude is not None:
-        folium.Marker(
-            location=[float(last_clicked_latitude), float(last_clicked_longitude)],
-            tooltip=f"Wybrane kliknięciem: Y={float(last_clicked_latitude):.6f}, X={float(last_clicked_longitude):.6f}",
-            icon=folium.Icon(color="blue"),
-        ).add_to(folium_map)
-
-    st_folium(
-        folium_map,
-        height=600,
-        use_container_width=True,
-        key=current_map_key,
-        returned_objects=["last_clicked", "center", "zoom"],
-        center=[float(st.session_state["map_center_latitude"]), float(st.session_state["map_center_longitude"])],
-        zoom=int(st.session_state["map_zoom_level"]),
-    )
 
 
 def run_app() -> None:
