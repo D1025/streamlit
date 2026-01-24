@@ -335,6 +335,53 @@ def render_file_import_section(calculation_method: str) -> None:
 def render_add_point_from_map_section(calculation_method: str) -> None:
     st.subheader("Dodanie punktu na podstawie kliknięcia na mapie")
 
+    if calculation_method == "TOPSIS":
+        st.write("W tym miejscu ustawiasz domyślne wartości kryteriów, które zostaną wpisane automatycznie, gdy dodasz punkt z mapy.")
+        st.write("Dzięki temu nie musisz od razu uzupełniać całej tabeli, a później możesz doprecyzować wartości ręcznie.")
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+        if len(selected_criteria_columns) == 0:
+            st.info("Nie widzę jeszcze kryteriów TOPSIS. Dodaj kryterium i wybierz je do obliczeń, wtedy pojawią się domyślne wartości.")
+        else:
+            st.caption("Domyślne wartości będą użyte tylko przy dodawaniu punktu z mapy. Punkty wpisywane ręcznie możesz uzupełniać niezależnie.")
+            current_default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+            updated_default_values_by_criteria: Dict[str, float] = dict(current_default_values_by_criteria)
+
+            for criterion_name in selected_criteria_columns:
+                updated_default_values_by_criteria[criterion_name] = st.number_input(
+                    f"Domyślna wartość kryterium: {criterion_name}",
+                    value=float(current_default_values_by_criteria.get(criterion_name, 1.0)),
+                    format="%.6f",
+                    help="Ta wartość zostanie wpisana w nowym punkcie dodanym z mapy. Później możesz ją zmienić w tabeli.",
+                    key=f"topsis_map_default_{criterion_name}",
+                )
+
+            st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in updated_default_values_by_criteria.items()}
+    else:
+        st.write("W tym miejscu ustawiasz domyślne wartości stawki transportowej i masy, które zostaną wpisane automatycznie, gdy dodasz punkt z mapy.")
+        st.write("To przyspiesza pracę: najpierw dodajesz punkty, a potem ewentualnie dopracowujesz dane w tabeli.")
+
+        st.session_state["map_default_transport_rate"] = st.number_input(
+            "Domyślna stawka transportowa",
+            value=float(st.session_state.get("map_default_transport_rate", 1.0)),
+            min_value=0.0,
+            format="%.6f",
+            help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy. Wagę punktu liczymy jako stawka transportowa × masa.",
+            key="centroid_map_default_transport_rate",
+        )
+        st.session_state["map_default_mass"] = st.number_input(
+            "Domyślna masa",
+            value=float(st.session_state.get("map_default_mass", 1.0)),
+            min_value=0.0,
+            format="%.6f",
+            help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy. Wagę punktu liczymy jako stawka transportowa × masa.",
+            key="centroid_map_default_mass",
+        )
+
     last_clicked_longitude = st.session_state.get("map_last_clicked_longitude")
     last_clicked_latitude = st.session_state.get("map_last_clicked_latitude")
 
@@ -344,9 +391,8 @@ def render_add_point_from_map_section(calculation_method: str) -> None:
 
     st.write(f"Wybrane współrzędne z mapy: X={float(last_clicked_longitude):.6f}, Y={float(last_clicked_latitude):.6f}")
 
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
     if calculation_method == "TOPSIS":
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
         available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
         update_topsis_state_for_available_criteria(available_criteria_columns)
         selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
@@ -492,26 +538,6 @@ def render_centroid_controls(guided_mode: bool) -> None:
         bump_interactive_folium_map_key()
 
     st.divider()
-    st.subheader("Domyślne wartości dla punktu dodawanego z mapy")
-
-    st.session_state["map_default_transport_rate"] = st.number_input(
-        "Domyślna stawka transportowa",
-        value=float(st.session_state.get("map_default_transport_rate", 1.0)),
-        min_value=0.0,
-        format="%.6f",
-        help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy przyciskiem, a nie ustawisz stawki ręcznie.",
-        key="centroid_map_default_transport_rate",
-    )
-    st.session_state["map_default_mass"] = st.number_input(
-        "Domyślna masa",
-        value=float(st.session_state.get("map_default_mass", 1.0)),
-        min_value=0.0,
-        format="%.6f",
-        help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy przyciskiem, a nie ustawisz masy ręcznie.",
-        key="centroid_map_default_mass",
-    )
-
-    st.divider()
     st.subheader("Wynik i wyjaśnienie")
 
     updated_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
@@ -603,10 +629,10 @@ def render_topsis_controls(guided_mode: bool) -> None:
         key="topsis_criterion_column_name",
     )
     criterion_default_value = st.number_input(
-        "Domyślna wartość nowego kryterium",
+        "Wartość startowa nowego kryterium",
         value=1.0,
         format="%.6f",
-        help="Wartość zostanie wpisana w istniejących punktach oraz będzie używana jako domyślna przy dodawaniu punktu z mapy.",
+        help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium.",
         key="topsis_criterion_default_value",
     )
 
@@ -661,7 +687,6 @@ def render_topsis_controls(guided_mode: bool) -> None:
         for criterion_name in selected_criteria_columns:
             current_weight_value = float(criteria_weights.get(criterion_name, 1.0))
             current_impact_value = str(criteria_impacts.get(criterion_name, "benefit")).strip().lower()
-            current_default_value = float(default_values_by_criteria.get(criterion_name, 1.0))
 
             criteria_weights[criterion_name] = st.number_input(
                 f"Waga kryterium: {criterion_name}",
@@ -681,14 +706,6 @@ def render_topsis_controls(guided_mode: bool) -> None:
                 key=f"topsis_impact_{criterion_name}",
             )
             criteria_impacts[criterion_name] = "benefit" if str(impact_label).startswith("Korzyść") else "cost"
-
-            default_values_by_criteria[criterion_name] = st.number_input(
-                f"Domyślna wartość przy dodaniu z mapy: {criterion_name}",
-                value=float(current_default_value),
-                format="%.6f",
-                help="Ta wartość zostanie użyta, gdy dodasz punkt z mapy przyciskiem, a potem dopiero uzupełnisz dane w tabeli.",
-                key=f"topsis_default_{criterion_name}",
-            )
 
     st.session_state["topsis_criteria_weights"] = {str(key).strip().lower(): float(value) for key, value in criteria_weights.items()}
     st.session_state["topsis_criteria_impacts"] = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts.items()}
