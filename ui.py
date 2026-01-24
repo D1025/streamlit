@@ -35,6 +35,9 @@ def init_session_state() -> None:
     if "guided_mode" not in st.session_state:
         st.session_state["guided_mode"] = True
 
+    if "map_pinning_enabled" not in st.session_state:
+        st.session_state["map_pinning_enabled"] = True
+
     if "map_default_transport_rate" not in st.session_state:
         st.session_state["map_default_transport_rate"] = 1.0
 
@@ -69,6 +72,29 @@ def init_session_state() -> None:
         st.session_state["interactive_folium_map_key_version"] = 0
 
 
+def apply_sticky_map_layout_styles(map_pinning_enabled: bool) -> None:
+    if not bool(map_pinning_enabled):
+        return
+
+    st.markdown(
+        """
+        <style>
+        @media (min-width: 992px) {
+            div[data-testid="stHorizontalBlock"] {
+                align-items: flex-start;
+            }
+            div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
+                position: sticky;
+                top: 0.75rem;
+                align-self: flex-start;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def get_interactive_folium_map_key() -> str:
     return f"interactive_folium_map_{int(st.session_state['interactive_folium_map_key_version'])}"
 
@@ -77,7 +103,7 @@ def bump_interactive_folium_map_key() -> None:
     st.session_state["interactive_folium_map_key_version"] = int(st.session_state["interactive_folium_map_key_version"]) + 1
 
 
-def render_sidebar_menu() -> Tuple[str, str, bool]:
+def render_sidebar_menu() -> Tuple[str, str, bool, bool]:
     with st.sidebar:
         st.title("Nawigacja")
 
@@ -111,10 +137,23 @@ def render_sidebar_menu() -> Tuple[str, str, bool]:
         )
         st.session_state["guided_mode"] = bool(guided_mode)
 
+        map_pinning_enabled = st.toggle(
+            "Przypnij mapę podczas przewijania (komputer)",
+            value=bool(st.session_state.get("map_pinning_enabled", True)),
+            help="Na większych ekranach mapa zostaje w miejscu, gdy przewijasz treści w lewej kolumnie. Na telefonie ta opcja nie ma sensu, więc jest ignorowana.",
+            key="map_pinning_enabled_toggle",
+        )
+        st.session_state["map_pinning_enabled"] = bool(map_pinning_enabled)
+
         st.divider()
         render_context_help_in_sidebar(str(st.session_state.get("active_page")), str(st.session_state.get("calculation_method")), bool(st.session_state.get("guided_mode")))
 
-    return str(st.session_state.get("active_page")), str(st.session_state.get("calculation_method")), bool(st.session_state.get("guided_mode"))
+    return (
+        str(st.session_state.get("active_page")),
+        str(st.session_state.get("calculation_method")),
+        bool(st.session_state.get("guided_mode")),
+        bool(st.session_state.get("map_pinning_enabled")),
+    )
 
 
 def render_context_help_in_sidebar(active_page: str, calculation_method: str, guided_mode: bool) -> None:
@@ -122,7 +161,7 @@ def render_context_help_in_sidebar(active_page: str, calculation_method: str, gu
 
     if active_page == "Obliczenia":
         st.write("Mapa: dodawaj punkt narzędziem markera, edytuj w trybie Edytuj, usuwaj w trybie Usuń.")
-        st.write("Punkty dodane na mapie od razu trafiają do tabeli po lewej.")
+        st.write("Punkty dodane na mapie od razu aktualizują tabelę po lewej.")
         if calculation_method == "Środek ciężkości":
             st.write("Wymagane: współrzędne (X, Y). Zalecane: stawka transportowa i masa, bo tworzą wagę punktu.")
         else:
@@ -268,45 +307,6 @@ def get_points_table_column_config_for_topsis(points_dataframe: pd.DataFrame, se
             )
 
     return column_config
-
-
-def render_onboarding(calculation_method: str, guided_mode: bool) -> None:
-    if not guided_mode:
-        return
-
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
-    step_has_points = len(points_dataframe) > 0
-    step_has_topsis_criteria = True
-    if calculation_method == "TOPSIS":
-        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
-        update_topsis_state_for_available_criteria(available_criteria_columns)
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        step_has_topsis_criteria = len(selected_criteria_columns) > 0
-
-    completed_steps = 0
-    if step_has_points:
-        completed_steps += 1
-    if calculation_method == "TOPSIS" and step_has_topsis_criteria:
-        completed_steps += 1
-    if calculation_method != "TOPSIS" and step_has_points:
-        completed_steps += 1
-
-    step_count = 2
-    progress_value = float(completed_steps) / float(step_count) if step_count > 0 else 0.0
-
-    st.subheader("Przewodnik: co teraz zrobić")
-    st.progress(progress_value)
-
-    if not step_has_points:
-        st.info("Krok 1: dodaj punkty. Możesz je wczytać z pliku, dodać ręcznie albo dodać na mapie narzędziem markera.")
-        return
-
-    if calculation_method == "TOPSIS" and not step_has_topsis_criteria:
-        st.info("Krok 2: wybierz kryteria TOPSIS. Zaznacz przynajmniej jedno kryterium w sekcji wyboru kryteriów.")
-        return
-
-    st.success("Masz komplet minimum danych. Przejdź do sekcji „Wynik i wyjaśnienie”, aby zobaczyć rezultat.")
 
 
 def render_file_import_section() -> None:
@@ -555,13 +555,6 @@ def render_map(calculation_method: str, guided_mode: bool) -> None:
 def render_centroid_controls(guided_mode: bool) -> None:
     st.header("Dane i obliczenia: metoda środka ciężkości")
 
-    if guided_mode:
-        with st.expander("Co oznacza ta metoda i jakie dane są potrzebne?", expanded=False):
-            st.write("Ta metoda wyznacza wynik jako średnią ważoną współrzędnych.")
-            st.write("Każdy punkt ma wagę: stawka transportowa × masa. Im większa waga, tym mocniejszy wpływ punktu na wynik.")
-            st.latex(r"w_i = ST_i \cdot M_i")
-            st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
-
     render_file_import_section()
 
     st.divider()
@@ -599,59 +592,6 @@ def render_centroid_controls(guided_mode: bool) -> None:
         st.dataframe(display_dataframe, use_container_width=True)
 
     st.divider()
-    st.subheader("Dodaj punkt ręcznie")
-
-    with st.form("centroid_add_point_form", clear_on_submit=False):
-        manual_longitude = st.number_input(
-            "Długość geograficzna (X)",
-            value=21.012200,
-            format="%.6f",
-            help="Podaj długość geograficzną punktu. Przykład dla Warszawy to około 21.0122.",
-            key="centroid_manual_longitude",
-        )
-        manual_latitude = st.number_input(
-            "Szerokość geograficzna (Y)",
-            value=52.229700,
-            format="%.6f",
-            help="Podaj szerokość geograficzną punktu. Przykład dla Warszawy to około 52.2297.",
-            key="centroid_manual_latitude",
-        )
-        manual_transport_rate = st.number_input(
-            "Stawka transportowa",
-            value=1.0,
-            min_value=0.0,
-            format="%.6f",
-            help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
-            key="centroid_manual_transport_rate",
-        )
-        manual_mass = st.number_input(
-            "Masa",
-            value=1.0,
-            min_value=0.0,
-            format="%.6f",
-            help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
-            key="centroid_manual_mass",
-        )
-        submit_add_point = st.form_submit_button(
-            "Dodaj punkt",
-            use_container_width=True,
-            help="Doda punkt do tabeli.",
-        )
-
-    if submit_add_point:
-        st.session_state["points_dataframe"] = append_point(
-            st.session_state["points_dataframe"],
-            manual_longitude,
-            manual_latitude,
-            transport_rate=manual_transport_rate,
-            mass=manual_mass,
-            additional_columns_values=None,
-        )
-        st.success("Dodano punkt.")
-        st.session_state["map_marker_positions_snapshot"] = ()
-        bump_interactive_folium_map_key()
-
-    st.divider()
     st.subheader("Wynik i wyjaśnienie")
 
     updated_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
@@ -668,11 +608,9 @@ def render_centroid_controls(guided_mode: bool) -> None:
 
     if guided_mode:
         with st.expander("Skąd się wziął wynik? Pokaż krok po kroku", expanded=True):
-            st.write("1) Dla każdego punktu liczymy wagę:")
+            st.write("1) Dla każdego punktu liczymy wagę: stawka transportowa × masa.")
             st.latex(r"w_i = ST_i \cdot M_i")
-            st.write("2) Liczymy sumy ważone współrzędnych:")
-            st.latex(r"\sum (w_i \cdot X_i) \quad\text{oraz}\quad \sum (w_i \cdot Y_i)")
-            st.write("3) Dzielimy przez sumę wag, aby uzyskać średnią ważoną:")
+            st.write("2) Liczymy sumy ważone współrzędnych i dzielimy przez sumę wag.")
             st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
 
             st.write(f"Suma wag: {float(center_of_gravity_details.total_weight):.6f}")
@@ -683,10 +621,9 @@ def render_centroid_controls(guided_mode: bool) -> None:
                 st.warning("Suma wag wyszła bliska zeru, więc wynik policzono jako zwykłą średnią współrzędnych.")
 
             st.divider()
-            st.write("4) Dodatkowo liczymy odległość euklidesową od wyniku do każdego punktu i ważymy ją wagą:")
+            st.write("3) Dodatkowo liczymy odległości euklidesowe i ich wkład do sumy ważonej.")
             st.latex(r"d_i = \sqrt{(X - X_i)^2 + (Y - Y_i)^2}")
             st.latex(r"\sum (w_i \cdot d_i)")
-            st.write("Poniżej tabela pokazująca wagę i wkład każdego punktu:")
 
             breakdown_dataframe = center_of_gravity_details.per_point_breakdown_dataframe.copy()
             breakdown_dataframe = breakdown_dataframe.rename(
@@ -718,15 +655,6 @@ def render_centroid_controls(guided_mode: bool) -> None:
 
 def render_topsis_controls(guided_mode: bool) -> None:
     st.header("Dane i obliczenia: TOPSIS")
-
-    if guided_mode:
-        with st.expander("Co oznacza TOPSIS i jakie dane są potrzebne?", expanded=False):
-            st.write("TOPSIS tworzy ranking punktów na podstawie wielu kryteriów.")
-            st.write("Każdy punkt ma współrzędne (X, Y) oraz wartości kryteriów (liczb).")
-            st.write("Ustawiasz wagę kryterium (jak bardzo ma wpływać) oraz typ:")
-            st.write("• Korzyść: większa wartość jest lepsza")
-            st.write("• Koszt: mniejsza wartość jest lepsza")
-            st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
 
     render_file_import_section()
 
@@ -851,54 +779,6 @@ def render_topsis_controls(guided_mode: bool) -> None:
         st.dataframe(points_dataframe, use_container_width=True)
 
     st.divider()
-    st.subheader("Dodaj punkt ręcznie")
-
-    with st.form("topsis_add_point_form", clear_on_submit=False):
-        manual_longitude = st.number_input(
-            "Długość geograficzna (X)",
-            value=21.012200,
-            format="%.6f",
-            help="Podaj długość geograficzną punktu.",
-            key="topsis_manual_longitude",
-        )
-        manual_latitude = st.number_input(
-            "Szerokość geograficzna (Y)",
-            value=52.229700,
-            format="%.6f",
-            help="Podaj szerokość geograficzną punktu.",
-            key="topsis_manual_latitude",
-        )
-
-        manual_criteria_values: Dict[str, float] = {}
-        for criterion_name in selected_criteria_columns:
-            manual_criteria_values[criterion_name] = st.number_input(
-                f"Wartość kryterium: {criterion_name}",
-                value=float(st.session_state["topsis_default_values_by_criteria"].get(criterion_name, 1.0)),
-                format="%.6f",
-                help="Ustaw wartość kryterium dla dodawanego punktu.",
-                key=f"topsis_manual_{criterion_name}",
-            )
-
-        submit_add_point = st.form_submit_button(
-            "Dodaj punkt",
-            use_container_width=True,
-            help="Doda punkt do tabeli.",
-        )
-
-    if submit_add_point:
-        st.session_state["points_dataframe"] = append_point(
-            st.session_state["points_dataframe"],
-            manual_longitude,
-            manual_latitude,
-            transport_rate=None,
-            mass=None,
-            additional_columns_values=manual_criteria_values,
-        )
-        st.success("Dodano punkt.")
-        st.session_state["map_marker_positions_snapshot"] = ()
-        bump_interactive_folium_map_key()
-
-    st.divider()
     st.subheader("Wynik i wyjaśnienie")
 
     points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
@@ -928,68 +808,22 @@ def render_topsis_controls(guided_mode: bool) -> None:
 
     st.subheader("Ranking punktów")
     ranking_dataframe = topsis_details.ranking_dataframe.copy()
-    ranking_dataframe = ranking_dataframe.rename(columns={"longitude": "Długość geograficzna (X)", "latitude": "Szerokość geograficzna (Y)", "topsis_score": "Wynik TOPSIS", "topsis_rank": "Pozycja w rankingu"})
+    ranking_dataframe = ranking_dataframe.rename(
+        columns={
+            "longitude": "Długość geograficzna (X)",
+            "latitude": "Szerokość geograficzna (Y)",
+            "topsis_score": "Wynik TOPSIS",
+            "topsis_rank": "Pozycja w rankingu",
+        }
+    )
     st.dataframe(ranking_dataframe, use_container_width=True)
 
     if guided_mode:
-        with st.expander("Skąd się wziął ranking? Pokaż kroki obliczeń TOPSIS", expanded=True):
-            st.write("Krok 1: macierz decyzyjna (same kryteria). Braki są traktowane jako 0.")
+        with st.expander("Skąd się wziął ranking? Pokaż kroki obliczeń TOPSIS", expanded=False):
+            st.write("Macierz decyzyjna (kryteria po zebraniu danych):")
             st.dataframe(topsis_details.decision_matrix, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 2: normalizacja wektorowa w kolumnach, aby różne skale nie dominowały.")
-            st.latex(r"r_{ij} = \frac{x_{ij}}{\sqrt{\sum_i x_{ij}^2}}")
-            st.dataframe(topsis_details.normalized_matrix, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 3: wagi kryteriów (znormalizowane tak, aby sumowały się do 1).")
-            weights_dataframe = pd.DataFrame(
-                [{"kryterium": column_name, "waga_znormalizowana": float(weight_value)} for column_name, weight_value in topsis_details.normalized_weights_by_column.items()]
-            )
-            weights_dataframe = weights_dataframe.rename(columns={"kryterium": "Kryterium", "waga_znormalizowana": "Waga znormalizowana"})
-            st.dataframe(weights_dataframe, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 4: macierz znormalizowana i ważona.")
-            st.latex(r"v_{ij} = r_{ij} \cdot w_j")
+            st.write("Macierz po normalizacji i uwzględnieniu wag:")
             st.dataframe(topsis_details.weighted_normalized_matrix, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 5: ideał najlepszy i najgorszy dla każdego kryterium (korzyść/koszt).")
-            ideal_rows: List[Dict[str, float]] = []
-            for column_name in topsis_details.valid_criteria_columns:
-                ideal_rows.append(
-                    {
-                        "kryterium": str(column_name),
-                        "ideał_najlepszy": float(topsis_details.ideal_best_by_column.get(column_name, 0.0)),
-                        "ideał_najgorszy": float(topsis_details.ideal_worst_by_column.get(column_name, 0.0)),
-                        "typ": "korzyść" if str(st.session_state.get("topsis_criteria_impacts", {}).get(column_name, "benefit")).strip().lower() != "cost" else "koszt",
-                    }
-                )
-            ideals_dataframe = pd.DataFrame(ideal_rows)
-            ideals_dataframe = ideals_dataframe.rename(columns={"kryterium": "Kryterium", "ideał_najlepszy": "Ideał najlepszy", "ideał_najgorszy": "Ideał najgorszy", "typ": "Typ kryterium"})
-            st.dataframe(ideals_dataframe, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 6: odległości od ideału najlepszego i najgorszego oraz wynik końcowy.")
-            st.latex(r"d^+_i = \sqrt{\sum_j (v_{ij} - v^+_j)^2} \qquad d^-_i = \sqrt{\sum_j (v_{ij} - v^-_j)^2}")
-            st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
-
-            distances_dataframe = pd.DataFrame(
-                {
-                    "odległość_do_najlepszego": [float(value) for value in topsis_details.distances_to_best],
-                    "odległość_do_najgorszego": [float(value) for value in topsis_details.distances_to_worst],
-                    "wynik_topsis": [float(value) for value in topsis_details.topsis_scores],
-                }
-            )
-            distances_dataframe = distances_dataframe.rename(
-                columns={
-                    "odległość_do_najlepszego": "Odległość do ideału najlepszego",
-                    "odległość_do_najgorszego": "Odległość do ideału najgorszego",
-                    "wynik_topsis": "Wynik TOPSIS",
-                }
-            )
-            st.dataframe(distances_dataframe, use_container_width=True)
 
     if st.button(
         "Wyczyść wszystkie punkty",
@@ -1012,10 +846,10 @@ def run_app() -> None:
 
     init_session_state()
 
-    active_page, calculation_method, guided_mode = render_sidebar_menu()
+    active_page, calculation_method, guided_mode, map_pinning_enabled = render_sidebar_menu()
 
     st.title("Lokalizacja punktu logistycznego")
-    st.caption("Dodaj punkty, wybierz metodę, a aplikacja policzy wynik i pokaże, skąd się wziął.")
+    st.caption("Dodaj punkty na mapie, skonfiguruj metodę, a aplikacja policzy wynik.")
 
     if active_page == "Wyjaśnienie metod":
         render_methods_page()
@@ -1025,7 +859,7 @@ def run_app() -> None:
         render_help_page()
         return
 
-    render_onboarding(calculation_method, guided_mode)
+    apply_sticky_map_layout_styles(map_pinning_enabled)
 
     control_column, map_column = st.columns([1, 2], gap="large")
 
