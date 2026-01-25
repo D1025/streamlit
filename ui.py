@@ -77,6 +77,37 @@ def bump_interactive_folium_map_key() -> None:
     st.session_state["interactive_folium_map_key_version"] = int(st.session_state["interactive_folium_map_key_version"]) + 1
 
 
+def inject_responsive_layout_css() -> None:
+    st.markdown(
+        """
+<style>
+#layout_anchor + div[data-testid="stHorizontalBlock"] {
+  gap: 1.5rem;
+}
+@media (min-width: 992px) {
+  #layout_anchor + div[data-testid="stHorizontalBlock"] {
+    align-items: flex-start;
+  }
+  #layout_anchor + div[data-testid="stHorizontalBlock"] > div:nth-child(2) {
+    position: sticky;
+    top: 1rem;
+    align-self: flex-start;
+  }
+}
+@media (max-width: 991px) {
+  #layout_anchor + div[data-testid="stHorizontalBlock"] {
+    flex-direction: column-reverse;
+  }
+  #layout_anchor + div[data-testid="stHorizontalBlock"] > div {
+    width: 100% !important;
+  }
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_sidebar_menu() -> Tuple[str, str, bool]:
     with st.sidebar:
         st.title("Nawigacja")
@@ -121,8 +152,8 @@ def render_context_help_in_sidebar(active_page: str, calculation_method: str, gu
     st.subheader("Pomoc kontekstowa")
 
     if active_page == "Obliczenia":
-        st.write("Mapa: dodawaj punkt narzędziem markera, edytuj w trybie Edytuj, usuwaj w trybie Usuń.")
-        st.write("Punkty dodane na mapie od razu trafiają do tabeli po lewej.")
+        st.write("Mapa: dodawaj markerem, edytuj w trybie Edytuj, usuwaj w trybie Usuń.")
+        st.write("Zmiany z mapy od razu aktualizują tabelę z punktami.")
         if calculation_method == "Środek ciężkości":
             st.write("Wymagane: współrzędne (X, Y). Zalecane: stawka transportowa i masa, bo tworzą wagę punktu.")
         else:
@@ -208,7 +239,7 @@ def update_topsis_state_for_available_criteria(available_criteria_columns: List[
 
     st.session_state["topsis_criteria_weights"] = updated_criteria_weights
     st.session_state["topsis_criteria_impacts"] = updated_criteria_impacts
-    st.session_state["topsis_default_values_by_criteria"] = updated_default_values_by_criteria
+    st.session_state["topsis_default_values_by_criteria"] = default_values_by_criteria | updated_default_values_by_criteria
 
 
 def get_points_table_column_config_for_centroid() -> Dict[str, object]:
@@ -270,45 +301,6 @@ def get_points_table_column_config_for_topsis(points_dataframe: pd.DataFrame, se
     return column_config
 
 
-def render_onboarding(calculation_method: str, guided_mode: bool) -> None:
-    if not guided_mode:
-        return
-
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
-    step_has_points = len(points_dataframe) > 0
-    step_has_topsis_criteria = True
-    if calculation_method == "TOPSIS":
-        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
-        update_topsis_state_for_available_criteria(available_criteria_columns)
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        step_has_topsis_criteria = len(selected_criteria_columns) > 0
-
-    completed_steps = 0
-    if step_has_points:
-        completed_steps += 1
-    if calculation_method == "TOPSIS" and step_has_topsis_criteria:
-        completed_steps += 1
-    if calculation_method != "TOPSIS" and step_has_points:
-        completed_steps += 1
-
-    step_count = 2
-    progress_value = float(completed_steps) / float(step_count) if step_count > 0 else 0.0
-
-    st.subheader("Przewodnik: co teraz zrobić")
-    st.progress(progress_value)
-
-    if not step_has_points:
-        st.info("Krok 1: dodaj punkty. Możesz je wczytać z pliku, dodać ręcznie albo dodać na mapie narzędziem markera.")
-        return
-
-    if calculation_method == "TOPSIS" and not step_has_topsis_criteria:
-        st.info("Krok 2: wybierz kryteria TOPSIS. Zaznacz przynajmniej jedno kryterium w sekcji wyboru kryteriów.")
-        return
-
-    st.success("Masz komplet minimum danych. Przejdź do sekcji „Wynik i wyjaśnienie”, aby zobaczyć rezultat.")
-
-
 def render_file_import_section() -> None:
     st.subheader("Wczytanie danych z pliku")
 
@@ -319,7 +311,7 @@ def render_file_import_section() -> None:
     )
 
     if uploaded_file is None:
-        st.caption("Jeśli nie masz pliku, możesz dodać punkty ręcznie albo na mapie.")
+        st.caption("Jeśli nie masz pliku, możesz dodać punkty ręcznie lub na mapie.")
         return
 
     uploaded_points_dataframe, message_text, message_level = read_points_from_uploaded_file_with_status(uploaded_file)
@@ -344,7 +336,7 @@ def render_map_defaults_section(calculation_method: str) -> None:
     if calculation_method == "TOPSIS":
         st.write("Gdy dodasz marker na mapie, aplikacja utworzy nowy wiersz w tabeli.")
         st.write("Poniższe wartości zostaną wpisane automatycznie do kryteriów dla nowego punktu.")
-        st.write("Jeśli później zmienisz te wartości, nie zmieni to punktów już dodanych — to są ustawienia tylko dla kolejnych markerów.")
+        st.write("Te ustawienia dotyczą tylko nowych markerów dodanych w przyszłości.")
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
         available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
@@ -372,7 +364,7 @@ def render_map_defaults_section(calculation_method: str) -> None:
 
     st.write("Gdy dodasz marker na mapie, aplikacja utworzy nowy wiersz w tabeli.")
     st.write("Poniższe wartości zostaną wpisane automatycznie do stawki transportowej i masy dla nowego punktu.")
-    st.write("Jeśli później zmienisz te wartości, nie zmieni to punktów już dodanych — to są ustawienia tylko dla kolejnych markerów.")
+    st.write("Te ustawienia dotyczą tylko nowych markerów dodanych w przyszłości.")
 
     st.session_state["map_default_transport_rate"] = st.number_input(
         "Domyślna stawka transportowa",
@@ -399,14 +391,10 @@ def build_default_values_by_column_for_map(calculation_method: str, points_dataf
     non_coordinate_columns = [column_name for column_name in ensured_points_dataframe.columns if column_name not in ("longitude", "latitude")]
 
     if calculation_method == "TOPSIS":
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
         default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
         for column_name in non_coordinate_columns:
             normalized_column_name = str(column_name).strip().lower()
-            if normalized_column_name in selected_criteria_columns:
-                default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
-            else:
-                default_values_by_column[normalized_column_name] = 1.0
+            default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
         return default_values_by_column
 
     default_values_by_column["transport_rate"] = float(st.session_state.get("map_default_transport_rate", 1.0))
@@ -543,7 +531,7 @@ def render_map(calculation_method: str, guided_mode: bool) -> None:
 
     st_folium(
         folium_map,
-        height=600,
+        height=650,
         use_container_width=True,
         key=current_map_key,
         returned_objects=["all_drawings", "last_active_drawing", "center", "zoom"],
@@ -552,470 +540,524 @@ def render_map(calculation_method: str, guided_mode: bool) -> None:
     )
 
 
-def render_centroid_controls(guided_mode: bool) -> None:
-    st.header("Dane i obliczenia: metoda środka ciężkości")
+def render_start_tab(calculation_method: str, guided_mode: bool) -> None:
+    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+    points_count = int(len(points_dataframe))
 
-    if guided_mode:
-        with st.expander("Co oznacza ta metoda i jakie dane są potrzebne?", expanded=False):
-            st.write("Ta metoda wyznacza wynik jako średnią ważoną współrzędnych.")
-            st.write("Każdy punkt ma wagę: stawka transportowa × masa. Im większa waga, tym mocniejszy wpływ punktu na wynik.")
-            st.latex(r"w_i = ST_i \cdot M_i")
-            st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
-
-    render_file_import_section()
+    st.subheader("Szybki start")
+    st.write("1) Dodaj punkty na mapie albo w tabeli.")
+    if calculation_method == "TOPSIS":
+        st.write("2) Dodaj kryteria, wybierz je do obliczeń i ustaw wagi oraz typy.")
+    st.write("3) Zobacz wynik w zakładce „Wynik”.")
 
     st.divider()
-    render_map_defaults_section("Środek ciężkości")
 
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
+    st.metric("Liczba punktów", f"{points_count}")
 
-    st.divider()
-    st.subheader("Tabela punktów")
-    st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
-
-    data_editor_function = getattr(st, "data_editor", None)
-    display_dataframe = points_dataframe.copy()
-    display_dataframe = display_dataframe[["longitude", "latitude", "transport_rate", "mass"]]
-
-    if data_editor_function is not None:
-        previous_signature = points_dataframe_signature(display_dataframe)
-        edited_display_dataframe = data_editor_function(
-            display_dataframe,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config=get_points_table_column_config_for_centroid(),
-        )
-        edited_display_dataframe = ensure_points_dataframe(edited_display_dataframe, include_transport_rate_and_mass=True)
-        edited_signature = points_dataframe_signature(edited_display_dataframe)
-        if edited_signature != previous_signature:
-            full_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
-            for column_name in ["longitude", "latitude", "transport_rate", "mass"]:
-                full_points_dataframe[column_name] = edited_display_dataframe[column_name]
-            st.session_state["points_dataframe"] = full_points_dataframe
-            st.success("Zapisano zmiany w tabeli.")
-            st.session_state["map_marker_positions_snapshot"] = ()
-            bump_interactive_folium_map_key()
+    if calculation_method == "TOPSIS":
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+        st.metric("Liczba wybranych kryteriów", f"{int(len(selected_criteria_columns))}")
     else:
-        st.dataframe(display_dataframe, use_container_width=True)
+        points_dataframe_with_weights = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
+        if len(points_dataframe_with_weights) > 0:
+            weights_sum = float((points_dataframe_with_weights["transport_rate"].astype(float) * points_dataframe_with_weights["mass"].astype(float)).sum())
+            st.metric("Suma wag (stawka × masa)", f"{weights_sum:.6f}")
 
     st.divider()
-    st.subheader("Dodaj punkt ręcznie")
-
-    with st.form("centroid_add_point_form", clear_on_submit=False):
-        manual_longitude = st.number_input(
-            "Długość geograficzna (X)",
-            value=21.012200,
-            format="%.6f",
-            help="Podaj długość geograficzną punktu. Przykład dla Warszawy to około 21.0122.",
-            key="centroid_manual_longitude",
-        )
-        manual_latitude = st.number_input(
-            "Szerokość geograficzna (Y)",
-            value=52.229700,
-            format="%.6f",
-            help="Podaj szerokość geograficzną punktu. Przykład dla Warszawy to około 52.2297.",
-            key="centroid_manual_latitude",
-        )
-        manual_transport_rate = st.number_input(
-            "Stawka transportowa",
-            value=1.0,
-            min_value=0.0,
-            format="%.6f",
-            help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
-            key="centroid_manual_transport_rate",
-        )
-        manual_mass = st.number_input(
-            "Masa",
-            value=1.0,
-            min_value=0.0,
-            format="%.6f",
-            help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
-            key="centroid_manual_mass",
-        )
-        submit_add_point = st.form_submit_button(
-            "Dodaj punkt",
-            use_container_width=True,
-            help="Doda punkt do tabeli.",
-        )
-
-    if submit_add_point:
-        st.session_state["points_dataframe"] = append_point(
-            st.session_state["points_dataframe"],
-            manual_longitude,
-            manual_latitude,
-            transport_rate=manual_transport_rate,
-            mass=manual_mass,
-            additional_columns_values=None,
-        )
-        st.success("Dodano punkt.")
-        st.session_state["map_marker_positions_snapshot"] = ()
-        bump_interactive_folium_map_key()
-
-    st.divider()
-    st.subheader("Wynik i wyjaśnienie")
-
-    updated_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
-
-    if len(updated_points_dataframe) == 0:
-        st.info("Dodaj co najmniej jeden punkt, aby policzyć wynik.")
-        return
-
-    center_of_gravity_details = compute_center_of_gravity_details(updated_points_dataframe)
-
-    st.metric("Długość geograficzna wyniku (X)", f"{float(center_of_gravity_details.centroid_longitude):.6f}")
-    st.metric("Szerokość geograficzna wyniku (Y)", f"{float(center_of_gravity_details.centroid_latitude):.6f}")
-    st.metric("Suma ważonych odległości euklidesowych", f"{float(center_of_gravity_details.weighted_distance_sum):.6f}")
 
     if guided_mode:
-        with st.expander("Skąd się wziął wynik? Pokaż krok po kroku", expanded=True):
-            st.write("1) Dla każdego punktu liczymy wagę:")
-            st.latex(r"w_i = ST_i \cdot M_i")
-            st.write("2) Liczymy sumy ważone współrzędnych:")
-            st.latex(r"\sum (w_i \cdot X_i) \quad\text{oraz}\quad \sum (w_i \cdot Y_i)")
-            st.write("3) Dzielimy przez sumę wag, aby uzyskać średnią ważoną:")
-            st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
+        st.info("Na komputerze mapa pozostaje w widoku podczas przewijania. Na telefonie mapa wyświetla się nad panelem sterowania.")
 
-            st.write(f"Suma wag: {float(center_of_gravity_details.total_weight):.6f}")
-            st.write(f"Suma (waga × X): {float(center_of_gravity_details.weighted_longitude_sum):.6f}")
-            st.write(f"Suma (waga × Y): {float(center_of_gravity_details.weighted_latitude_sum):.6f}")
 
-            if bool(center_of_gravity_details.used_fallback_average):
-                st.warning("Suma wag wyszła bliska zeru, więc wynik policzono jako zwykłą średnią współrzędnych.")
+def render_centroid_controls_panel(guided_mode: bool) -> None:
+    tab_sections = st.tabs(["Start", "Dane", "Dodawanie", "Wynik"])
 
-            st.divider()
-            st.write("4) Dodatkowo liczymy odległość euklidesową od wyniku do każdego punktu i ważymy ją wagą:")
-            st.latex(r"d_i = \sqrt{(X - X_i)^2 + (Y - Y_i)^2}")
-            st.latex(r"\sum (w_i \cdot d_i)")
-            st.write("Poniżej tabela pokazująca wagę i wkład każdego punktu:")
+    with tab_sections[0]:
+        render_start_tab("Środek ciężkości", guided_mode)
 
-            breakdown_dataframe = center_of_gravity_details.per_point_breakdown_dataframe.copy()
-            breakdown_dataframe = breakdown_dataframe.rename(
-                columns={
-                    "longitude": "Długość geograficzna (X)",
-                    "latitude": "Szerokość geograficzna (Y)",
-                    "transport_rate": "Stawka transportowa",
-                    "mass": "Masa",
-                    "point_weight": "Waga punktu",
-                    "weighted_longitude": "Waga × X",
-                    "weighted_latitude": "Waga × Y",
-                    "euclidean_distance": "Odległość euklidesowa",
-                    "weighted_euclidean_distance": "Waga × odległość",
-                }
+    with tab_sections[1]:
+        render_file_import_section()
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
+
+        st.divider()
+        st.subheader("Tabela punktów")
+        st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
+
+        data_editor_function = getattr(st, "data_editor", None)
+        display_dataframe = points_dataframe.copy()
+        display_dataframe = display_dataframe[["longitude", "latitude", "transport_rate", "mass"]]
+
+        if data_editor_function is not None:
+            previous_signature = points_dataframe_signature(display_dataframe)
+            edited_display_dataframe = data_editor_function(
+                display_dataframe,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config=get_points_table_column_config_for_centroid(),
             )
-            st.dataframe(breakdown_dataframe, use_container_width=True)
-
-    if st.button(
-        "Wyczyść wszystkie punkty",
-        use_container_width=True,
-        help="Usuwa wszystkie punkty i resetuje obliczenia.",
-        key="centroid_clear_points_button",
-    ):
-        st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude", "transport_rate", "mass"])
-        st.session_state["map_marker_positions_snapshot"] = ()
-        st.success("Wyczyszczono dane.")
-        bump_interactive_folium_map_key()
-
-
-def render_topsis_controls(guided_mode: bool) -> None:
-    st.header("Dane i obliczenia: TOPSIS")
-
-    if guided_mode:
-        with st.expander("Co oznacza TOPSIS i jakie dane są potrzebne?", expanded=False):
-            st.write("TOPSIS tworzy ranking punktów na podstawie wielu kryteriów.")
-            st.write("Każdy punkt ma współrzędne (X, Y) oraz wartości kryteriów (liczb).")
-            st.write("Ustawiasz wagę kryterium (jak bardzo ma wpływać) oraz typ:")
-            st.write("• Korzyść: większa wartość jest lepsza")
-            st.write("• Koszt: mniejsza wartość jest lepsza")
-            st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
-
-    render_file_import_section()
-
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
-    st.subheader("Dodaj kryterium")
-    st.caption("Kryterium to dodatkowa kolumna liczbowa opisująca punkt. Przykłady: koszt, czas, ryzyko, dostępność.")
-
-    criterion_column_name = st.text_input(
-        "Nazwa nowego kryterium",
-        value="",
-        help="Wpisz nazwę kolumny-kryterium. Używaj nazw prostych i bez spacji, np. koszt, czas, ryzyko.",
-        key="topsis_criterion_column_name",
-    )
-    criterion_default_value = st.number_input(
-        "Wartość startowa nowego kryterium",
-        value=1.0,
-        format="%.6f",
-        help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium.",
-        key="topsis_criterion_default_value",
-    )
-
-    if st.button(
-        "Dodaj kryterium do tabeli",
-        use_container_width=True,
-        help="Doda nową kolumnę do tabeli punktów.",
-        key="topsis_add_criterion_button",
-    ):
-        normalized_criterion_column_name = str(criterion_column_name).strip().lower()
-        if normalized_criterion_column_name:
-            updated_points_dataframe = points_dataframe.copy()
-            if normalized_criterion_column_name not in updated_points_dataframe.columns:
-                updated_points_dataframe[normalized_criterion_column_name] = float(criterion_default_value)
-                st.session_state["points_dataframe"] = updated_points_dataframe
-                st.success("Dodano kryterium.")
+            edited_display_dataframe = ensure_points_dataframe(edited_display_dataframe, include_transport_rate_and_mass=True)
+            edited_signature = points_dataframe_signature(edited_display_dataframe)
+            if edited_signature != previous_signature:
+                full_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
+                for column_name in ["longitude", "latitude", "transport_rate", "mass"]:
+                    full_points_dataframe[column_name] = edited_display_dataframe[column_name]
+                st.session_state["points_dataframe"] = full_points_dataframe
                 st.session_state["map_marker_positions_snapshot"] = ()
+                st.success("Zapisano zmiany w tabeli.")
                 bump_interactive_folium_map_key()
-            else:
-                st.warning("Takie kryterium już istnieje.")
         else:
-            st.warning("Podaj nazwę kryterium.")
+            st.dataframe(display_dataframe, use_container_width=True)
 
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+    with tab_sections[2]:
+        render_map_defaults_section("Środek ciężkości")
 
-    available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
-    update_topsis_state_for_available_criteria(available_criteria_columns)
+        st.divider()
+        st.subheader("Dodaj punkt ręcznie")
 
-    st.divider()
-    st.subheader("Wybór kryteriów do obliczeń")
-
-    selected_criteria_columns = st.multiselect(
-        "Które kryteria mają brać udział w rankingu?",
-        options=available_criteria_columns,
-        default=list(st.session_state.get("topsis_selected_criteria_columns", [])),
-        help="Zaznacz kryteria, które mają wpływać na ranking. Musisz wybrać co najmniej jedno.",
-        key="topsis_selected_criteria_columns_widget",
-    )
-    st.session_state["topsis_selected_criteria_columns"] = [str(column_name).strip().lower() for column_name in selected_criteria_columns if str(column_name).strip()]
-    update_topsis_state_for_available_criteria(available_criteria_columns)
-
-    selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-    criteria_weights: Dict[str, float] = dict(st.session_state.get("topsis_criteria_weights", {}))
-    criteria_impacts: Dict[str, str] = dict(st.session_state.get("topsis_criteria_impacts", {}))
-
-    st.divider()
-    st.subheader("Konfiguracja kryteriów")
-
-    if len(selected_criteria_columns) == 0:
-        st.info("Wybierz co najmniej jedno kryterium, aby ustawić wagi i typy.")
-    else:
-        for criterion_name in selected_criteria_columns:
-            current_weight_value = float(criteria_weights.get(criterion_name, 1.0))
-            current_impact_value = str(criteria_impacts.get(criterion_name, "benefit")).strip().lower()
-
-            criteria_weights[criterion_name] = st.number_input(
-                f"Waga kryterium: {criterion_name}",
-                value=float(current_weight_value),
+        with st.form("centroid_add_point_form", clear_on_submit=False):
+            manual_longitude = st.number_input(
+                "Długość geograficzna (X)",
+                value=21.012200,
+                format="%.6f",
+                help="Podaj długość geograficzną punktu. Przykład dla Warszawy to około 21.0122.",
+                key="centroid_manual_longitude",
+            )
+            manual_latitude = st.number_input(
+                "Szerokość geograficzna (Y)",
+                value=52.229700,
+                format="%.6f",
+                help="Podaj szerokość geograficzną punktu. Przykład dla Warszawy to około 52.2297.",
+                key="centroid_manual_latitude",
+            )
+            manual_transport_rate = st.number_input(
+                "Stawka transportowa",
+                value=1.0,
                 min_value=0.0,
                 format="%.6f",
-                help="Waga mówi, jak ważne jest kryterium względem innych. Liczy się proporcja wag.",
-                key=f"topsis_weight_{criterion_name}",
+                help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
+                key="centroid_manual_transport_rate",
             )
-
-            selected_impact_label = "Korzyść (większe = lepiej)" if current_impact_value != "cost" else "Koszt (mniejsze = lepiej)"
-            impact_label = st.selectbox(
-                f"Typ kryterium: {criterion_name}",
-                options=["Korzyść (większe = lepiej)", "Koszt (mniejsze = lepiej)"],
-                index=0 if selected_impact_label.startswith("Korzyść") else 1,
-                help="Wybierz, czy większa wartość jest lepsza (korzyść), czy gorsza (koszt).",
-                key=f"topsis_impact_{criterion_name}",
-            )
-            criteria_impacts[criterion_name] = "benefit" if str(impact_label).startswith("Korzyść") else "cost"
-
-    st.session_state["topsis_criteria_weights"] = {str(key).strip().lower(): float(value) for key, value in criteria_weights.items()}
-    st.session_state["topsis_criteria_impacts"] = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts.items()}
-
-    st.divider()
-    render_map_defaults_section("TOPSIS")
-
-    st.divider()
-    st.subheader("Tabela punktów (alternatywy)")
-    st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
-
-    data_editor_function = getattr(st, "data_editor", None)
-    if data_editor_function is not None:
-        previous_signature = points_dataframe_signature(points_dataframe)
-        edited_points_dataframe = data_editor_function(
-            points_dataframe,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config=get_points_table_column_config_for_topsis(points_dataframe, selected_criteria_columns),
-        )
-        edited_points_dataframe = ensure_points_dataframe(edited_points_dataframe, include_transport_rate_and_mass=False)
-        edited_signature = points_dataframe_signature(edited_points_dataframe)
-        if edited_signature != previous_signature:
-            st.session_state["points_dataframe"] = edited_points_dataframe
-            st.success("Zapisano zmiany w tabeli.")
-            st.session_state["map_marker_positions_snapshot"] = ()
-            bump_interactive_folium_map_key()
-            points_dataframe = edited_points_dataframe
-    else:
-        st.dataframe(points_dataframe, use_container_width=True)
-
-    st.divider()
-    st.subheader("Dodaj punkt ręcznie")
-
-    with st.form("topsis_add_point_form", clear_on_submit=False):
-        manual_longitude = st.number_input(
-            "Długość geograficzna (X)",
-            value=21.012200,
-            format="%.6f",
-            help="Podaj długość geograficzną punktu.",
-            key="topsis_manual_longitude",
-        )
-        manual_latitude = st.number_input(
-            "Szerokość geograficzna (Y)",
-            value=52.229700,
-            format="%.6f",
-            help="Podaj szerokość geograficzną punktu.",
-            key="topsis_manual_latitude",
-        )
-
-        manual_criteria_values: Dict[str, float] = {}
-        for criterion_name in selected_criteria_columns:
-            manual_criteria_values[criterion_name] = st.number_input(
-                f"Wartość kryterium: {criterion_name}",
-                value=float(st.session_state["topsis_default_values_by_criteria"].get(criterion_name, 1.0)),
+            manual_mass = st.number_input(
+                "Masa",
+                value=1.0,
+                min_value=0.0,
                 format="%.6f",
-                help="Ustaw wartość kryterium dla dodawanego punktu.",
-                key=f"topsis_manual_{criterion_name}",
+                help="Wartość wpływa na wagę punktu. Waga = stawka transportowa × masa.",
+                key="centroid_manual_mass",
+            )
+            submit_add_point = st.form_submit_button(
+                "Dodaj punkt",
+                use_container_width=True,
+                help="Doda punkt do tabeli.",
             )
 
-        submit_add_point = st.form_submit_button(
-            "Dodaj punkt",
-            use_container_width=True,
-            help="Doda punkt do tabeli.",
-        )
-
-    if submit_add_point:
-        st.session_state["points_dataframe"] = append_point(
-            st.session_state["points_dataframe"],
-            manual_longitude,
-            manual_latitude,
-            transport_rate=None,
-            mass=None,
-            additional_columns_values=manual_criteria_values,
-        )
-        st.success("Dodano punkt.")
-        st.session_state["map_marker_positions_snapshot"] = ()
-        bump_interactive_folium_map_key()
-
-    st.divider()
-    st.subheader("Wynik i wyjaśnienie")
-
-    points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
-
-    if len(points_dataframe) == 0:
-        st.info("Dodaj co najmniej jeden punkt, aby policzyć ranking.")
-        return
-    if len(selected_criteria_columns) == 0:
-        st.info("Wybierz co najmniej jedno kryterium, aby policzyć ranking TOPSIS.")
-        return
-
-    topsis_details = compute_topsis_details(
-        points_dataframe,
-        criteria_columns=selected_criteria_columns,
-        criteria_weights_by_name=st.session_state.get("topsis_criteria_weights", {}),
-        criteria_impacts_by_name=st.session_state.get("topsis_criteria_impacts", {}),
-    )
-
-    if len(topsis_details.ranking_dataframe) == 0:
-        st.info("Brak danych do obliczeń.")
-        return
-
-    best_row = topsis_details.ranking_dataframe.iloc[0]
-    st.metric("Najlepszy wynik TOPSIS", f"{float(best_row.get('topsis_score', 0.0)):.6f}")
-    st.metric("Długość geograficzna najlepszego punktu (X)", f"{float(best_row.get('longitude', 0.0)):.6f}")
-    st.metric("Szerokość geograficzna najlepszego punktu (Y)", f"{float(best_row.get('latitude', 0.0)):.6f}")
-
-    st.subheader("Ranking punktów")
-    ranking_dataframe = topsis_details.ranking_dataframe.copy()
-    ranking_dataframe = ranking_dataframe.rename(columns={"longitude": "Długość geograficzna (X)", "latitude": "Szerokość geograficzna (Y)", "topsis_score": "Wynik TOPSIS", "topsis_rank": "Pozycja w rankingu"})
-    st.dataframe(ranking_dataframe, use_container_width=True)
-
-    if guided_mode:
-        with st.expander("Skąd się wziął ranking? Pokaż kroki obliczeń TOPSIS", expanded=True):
-            st.write("Krok 1: macierz decyzyjna (same kryteria). Braki są traktowane jako 0.")
-            st.dataframe(topsis_details.decision_matrix, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 2: normalizacja wektorowa w kolumnach, aby różne skale nie dominowały.")
-            st.latex(r"r_{ij} = \frac{x_{ij}}{\sqrt{\sum_i x_{ij}^2}}")
-            st.dataframe(topsis_details.normalized_matrix, use_container_width=True)
-
-            st.divider()
-            st.write("Krok 3: wagi kryteriów (znormalizowane tak, aby sumowały się do 1).")
-            weights_dataframe = pd.DataFrame(
-                [{"kryterium": column_name, "waga_znormalizowana": float(weight_value)} for column_name, weight_value in topsis_details.normalized_weights_by_column.items()]
+        if submit_add_point:
+            st.session_state["points_dataframe"] = append_point(
+                st.session_state["points_dataframe"],
+                manual_longitude,
+                manual_latitude,
+                transport_rate=manual_transport_rate,
+                mass=manual_mass,
+                additional_columns_values=None,
             )
-            weights_dataframe = weights_dataframe.rename(columns={"kryterium": "Kryterium", "waga_znormalizowana": "Waga znormalizowana"})
-            st.dataframe(weights_dataframe, use_container_width=True)
+            st.session_state["map_marker_positions_snapshot"] = ()
+            st.success("Dodano punkt.")
+            bump_interactive_folium_map_key()
 
-            st.divider()
-            st.write("Krok 4: macierz znormalizowana i ważona.")
-            st.latex(r"v_{ij} = r_{ij} \cdot w_j")
-            st.dataframe(topsis_details.weighted_normalized_matrix, use_container_width=True)
+    with tab_sections[3]:
+        st.subheader("Wynik i wyjaśnienie")
 
-            st.divider()
-            st.write("Krok 5: ideał najlepszy i najgorszy dla każdego kryterium (korzyść/koszt).")
-            ideal_rows: List[Dict[str, float]] = []
-            for column_name in topsis_details.valid_criteria_columns:
-                ideal_rows.append(
-                    {
-                        "kryterium": str(column_name),
-                        "ideał_najlepszy": float(topsis_details.ideal_best_by_column.get(column_name, 0.0)),
-                        "ideał_najgorszy": float(topsis_details.ideal_worst_by_column.get(column_name, 0.0)),
-                        "typ": "korzyść" if str(st.session_state.get("topsis_criteria_impacts", {}).get(column_name, "benefit")).strip().lower() != "cost" else "koszt",
+        updated_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
+
+        if len(updated_points_dataframe) == 0:
+            st.info("Dodaj co najmniej jeden punkt, aby policzyć wynik.")
+            return
+
+        center_of_gravity_details = compute_center_of_gravity_details(updated_points_dataframe)
+
+        st.metric("Długość geograficzna wyniku (X)", f"{float(center_of_gravity_details.centroid_longitude):.6f}")
+        st.metric("Szerokość geograficzna wyniku (Y)", f"{float(center_of_gravity_details.centroid_latitude):.6f}")
+        st.metric("Suma ważonych odległości euklidesowych", f"{float(center_of_gravity_details.weighted_distance_sum):.6f}")
+
+        if guided_mode:
+            with st.expander("Skąd się wziął wynik? Pokaż krok po kroku", expanded=True):
+                st.write("1) Dla każdego punktu liczymy wagę:")
+                st.latex(r"w_i = ST_i \cdot M_i")
+                st.write("2) Liczymy sumy ważone współrzędnych:")
+                st.latex(r"\sum (w_i \cdot X_i) \quad\text{oraz}\quad \sum (w_i \cdot Y_i)")
+                st.write("3) Dzielimy przez sumę wag, aby uzyskać średnią ważoną:")
+                st.latex(r"X = \frac{\sum (w_i \cdot X_i)}{\sum w_i} \qquad Y = \frac{\sum (w_i \cdot Y_i)}{\sum w_i}")
+
+                st.write(f"Suma wag: {float(center_of_gravity_details.total_weight):.6f}")
+                st.write(f"Suma (waga × X): {float(center_of_gravity_details.weighted_longitude_sum):.6f}")
+                st.write(f"Suma (waga × Y): {float(center_of_gravity_details.weighted_latitude_sum):.6f}")
+
+                if bool(center_of_gravity_details.used_fallback_average):
+                    st.warning("Suma wag wyszła bliska zeru, więc wynik policzono jako zwykłą średnią współrzędnych.")
+
+                st.divider()
+                st.write("4) Dodatkowo liczymy odległość euklidesową od wyniku do każdego punktu i ważymy ją wagą:")
+                st.latex(r"d_i = \sqrt{(X - X_i)^2 + (Y - Y_i)^2}")
+                st.latex(r"\sum (w_i \cdot d_i)")
+                st.write("Poniżej tabela pokazująca wagę i wkład każdego punktu:")
+
+                breakdown_dataframe = center_of_gravity_details.per_point_breakdown_dataframe.copy()
+                breakdown_dataframe = breakdown_dataframe.rename(
+                    columns={
+                        "longitude": "Długość geograficzna (X)",
+                        "latitude": "Szerokość geograficzna (Y)",
+                        "transport_rate": "Stawka transportowa",
+                        "mass": "Masa",
+                        "point_weight": "Waga punktu",
+                        "weighted_longitude": "Waga × X",
+                        "weighted_latitude": "Waga × Y",
+                        "euclidean_distance": "Odległość euklidesowa",
+                        "weighted_euclidean_distance": "Waga × odległość",
                     }
                 )
-            ideals_dataframe = pd.DataFrame(ideal_rows)
-            ideals_dataframe = ideals_dataframe.rename(columns={"kryterium": "Kryterium", "ideał_najlepszy": "Ideał najlepszy", "ideał_najgorszy": "Ideał najgorszy", "typ": "Typ kryterium"})
-            st.dataframe(ideals_dataframe, use_container_width=True)
+                st.dataframe(breakdown_dataframe, use_container_width=True)
 
-            st.divider()
-            st.write("Krok 6: odległości od ideału najlepszego i najgorszego oraz wynik końcowy.")
-            st.latex(r"d^+_i = \sqrt{\sum_j (v_{ij} - v^+_j)^2} \qquad d^-_i = \sqrt{\sum_j (v_{ij} - v^-_j)^2}")
-            st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
+        if st.button(
+            "Wyczyść wszystkie punkty",
+            use_container_width=True,
+            help="Usuwa wszystkie punkty i resetuje obliczenia.",
+            key="centroid_clear_points_button",
+        ):
+            st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude", "transport_rate", "mass"])
+            st.session_state["map_marker_positions_snapshot"] = ()
+            st.success("Wyczyszczono dane.")
+            bump_interactive_folium_map_key()
 
-            distances_dataframe = pd.DataFrame(
-                {
-                    "odległość_do_najlepszego": [float(value) for value in topsis_details.distances_to_best],
-                    "odległość_do_najgorszego": [float(value) for value in topsis_details.distances_to_worst],
-                    "wynik_topsis": [float(value) for value in topsis_details.topsis_scores],
-                }
+
+def render_topsis_controls_panel(guided_mode: bool) -> None:
+    tab_sections = st.tabs(["Start", "Dane", "Konfiguracja", "Dodawanie", "Wynik"])
+
+    with tab_sections[0]:
+        render_start_tab("TOPSIS", guided_mode)
+
+    with tab_sections[1]:
+        render_file_import_section()
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+
+        st.divider()
+        st.subheader("Tabela punktów (alternatywy)")
+        st.caption("Możesz edytować wartości w tabeli. Punkty dodane na mapie pojawiają się tu automatycznie.")
+
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+
+        data_editor_function = getattr(st, "data_editor", None)
+        if data_editor_function is not None:
+            previous_signature = points_dataframe_signature(points_dataframe)
+            edited_points_dataframe = data_editor_function(
+                points_dataframe,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config=get_points_table_column_config_for_topsis(points_dataframe, selected_criteria_columns),
             )
-            distances_dataframe = distances_dataframe.rename(
-                columns={
-                    "odległość_do_najlepszego": "Odległość do ideału najlepszego",
-                    "odległość_do_najgorszego": "Odległość do ideału najgorszego",
-                    "wynik_topsis": "Wynik TOPSIS",
-                }
-            )
-            st.dataframe(distances_dataframe, use_container_width=True)
+            edited_points_dataframe = ensure_points_dataframe(edited_points_dataframe, include_transport_rate_and_mass=False)
+            edited_signature = points_dataframe_signature(edited_points_dataframe)
+            if edited_signature != previous_signature:
+                st.session_state["points_dataframe"] = edited_points_dataframe
+                st.session_state["map_marker_positions_snapshot"] = ()
+                st.success("Zapisano zmiany w tabeli.")
+                bump_interactive_folium_map_key()
+        else:
+            st.dataframe(points_dataframe, use_container_width=True)
 
-    if st.button(
-        "Wyczyść wszystkie punkty",
-        use_container_width=True,
-        help="Usuwa wszystkie punkty i resetuje konfigurację rankingu.",
-        key="topsis_clear_points_button",
-    ):
-        st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude"])
-        st.session_state["topsis_selected_criteria_columns"] = []
-        st.session_state["topsis_criteria_weights"] = {}
-        st.session_state["topsis_criteria_impacts"] = {}
-        st.session_state["topsis_default_values_by_criteria"] = {}
-        st.session_state["map_marker_positions_snapshot"] = ()
-        st.success("Wyczyszczono dane.")
-        bump_interactive_folium_map_key()
+    with tab_sections[2]:
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+
+        st.subheader("Dodaj kryterium")
+        st.caption("Kryterium to dodatkowa kolumna liczbowa opisująca punkt. Przykłady: koszt, czas, ryzyko, dostępność.")
+
+        criterion_column_name = st.text_input(
+            "Nazwa nowego kryterium",
+            value="",
+            help="Wpisz nazwę kolumny-kryterium. Używaj nazw prostych i bez spacji, np. koszt, czas, ryzyko.",
+            key="topsis_criterion_column_name",
+        )
+        criterion_default_value = st.number_input(
+            "Wartość startowa nowego kryterium",
+            value=1.0,
+            format="%.6f",
+            help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium oraz będzie używana jako domyślna dla punktów dodawanych z mapy.",
+            key="topsis_criterion_default_value",
+        )
+
+        if st.button(
+            "Dodaj kryterium do tabeli",
+            use_container_width=True,
+            help="Doda nową kolumnę do tabeli punktów.",
+            key="topsis_add_criterion_button",
+        ):
+            normalized_criterion_column_name = str(criterion_column_name).strip().lower()
+            if normalized_criterion_column_name:
+                updated_points_dataframe = points_dataframe.copy()
+                if normalized_criterion_column_name not in updated_points_dataframe.columns:
+                    updated_points_dataframe[normalized_criterion_column_name] = float(criterion_default_value)
+                    st.session_state["points_dataframe"] = updated_points_dataframe
+
+                    current_default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+                    current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
+                    st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in current_default_values_by_criteria.items()}
+
+                    st.session_state["map_marker_positions_snapshot"] = ()
+                    st.success("Dodano kryterium.")
+                    bump_interactive_folium_map_key()
+                else:
+                    current_default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+                    current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
+                    st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in current_default_values_by_criteria.items()}
+                    st.warning("Takie kryterium już istnieje. Zaktualizowano domyślną wartość dla punktów dodawanych z mapy.")
+            else:
+                st.warning("Podaj nazwę kryterium.")
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+
+        st.divider()
+        st.subheader("Wybór kryteriów do obliczeń")
+
+        selected_criteria_columns = st.multiselect(
+            "Które kryteria mają brać udział w rankingu?",
+            options=available_criteria_columns,
+            default=list(st.session_state.get("topsis_selected_criteria_columns", [])),
+            help="Zaznacz kryteria, które mają wpływać na ranking. Musisz wybrać co najmniej jedno.",
+            key="topsis_selected_criteria_columns_widget",
+        )
+        st.session_state["topsis_selected_criteria_columns"] = [str(column_name).strip().lower() for column_name in selected_criteria_columns if str(column_name).strip()]
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+        criteria_weights: Dict[str, float] = dict(st.session_state.get("topsis_criteria_weights", {}))
+        criteria_impacts: Dict[str, str] = dict(st.session_state.get("topsis_criteria_impacts", {}))
+
+        st.divider()
+        st.subheader("Wagi i typy kryteriów")
+
+        if len(selected_criteria_columns) == 0:
+            st.info("Wybierz co najmniej jedno kryterium, aby ustawić wagi i typy.")
+        else:
+            for criterion_name in selected_criteria_columns:
+                current_weight_value = float(criteria_weights.get(criterion_name, 1.0))
+                current_impact_value = str(criteria_impacts.get(criterion_name, "benefit")).strip().lower()
+
+                criteria_weights[criterion_name] = st.number_input(
+                    f"Waga kryterium: {criterion_name}",
+                    value=float(current_weight_value),
+                    min_value=0.0,
+                    format="%.6f",
+                    help="Waga mówi, jak ważne jest kryterium względem innych. Liczy się proporcja wag.",
+                    key=f"topsis_weight_{criterion_name}",
+                )
+
+                selected_impact_label = "Korzyść (większe = lepiej)" if current_impact_value != "cost" else "Koszt (mniejsze = lepiej)"
+                impact_label = st.selectbox(
+                    f"Typ kryterium: {criterion_name}",
+                    options=["Korzyść (większe = lepiej)", "Koszt (mniejsze = lepiej)"],
+                    index=0 if selected_impact_label.startswith("Korzyść") else 1,
+                    help="Wybierz, czy większa wartość jest lepsza (korzyść), czy gorsza (koszt).",
+                    key=f"topsis_impact_{criterion_name}",
+                )
+                criteria_impacts[criterion_name] = "benefit" if str(impact_label).startswith("Korzyść") else "cost"
+
+        st.session_state["topsis_criteria_weights"] = {str(key).strip().lower(): float(value) for key, value in criteria_weights.items()}
+        st.session_state["topsis_criteria_impacts"] = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts.items()}
+
+    with tab_sections[3]:
+        render_map_defaults_section("TOPSIS")
+
+        st.divider()
+        st.subheader("Dodaj punkt ręcznie")
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+
+        with st.form("topsis_add_point_form", clear_on_submit=False):
+            manual_longitude = st.number_input(
+                "Długość geograficzna (X)",
+                value=21.012200,
+                format="%.6f",
+                help="Podaj długość geograficzną punktu.",
+                key="topsis_manual_longitude",
+            )
+            manual_latitude = st.number_input(
+                "Szerokość geograficzna (Y)",
+                value=52.229700,
+                format="%.6f",
+                help="Podaj szerokość geograficzną punktu.",
+                key="topsis_manual_latitude",
+            )
+
+            manual_criteria_values: Dict[str, float] = {}
+            for criterion_name in selected_criteria_columns:
+                manual_criteria_values[criterion_name] = st.number_input(
+                    f"Wartość kryterium: {criterion_name}",
+                    value=float(st.session_state["topsis_default_values_by_criteria"].get(criterion_name, 1.0)),
+                    format="%.6f",
+                    help="Ustaw wartość kryterium dla dodawanego punktu.",
+                    key=f"topsis_manual_{criterion_name}",
+                )
+
+            submit_add_point = st.form_submit_button(
+                "Dodaj punkt",
+                use_container_width=True,
+                help="Doda punkt do tabeli.",
+            )
+
+        if submit_add_point:
+            st.session_state["points_dataframe"] = append_point(
+                st.session_state["points_dataframe"],
+                manual_longitude,
+                manual_latitude,
+                transport_rate=None,
+                mass=None,
+                additional_columns_values=manual_criteria_values,
+            )
+            st.session_state["map_marker_positions_snapshot"] = ()
+            st.success("Dodano punkt.")
+            bump_interactive_folium_map_key()
+
+    with tab_sections[4]:
+        st.subheader("Wynik i wyjaśnienie")
+
+        points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
+
+        available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
+        update_topsis_state_for_available_criteria(available_criteria_columns)
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
+
+        if len(points_dataframe) == 0:
+            st.info("Dodaj co najmniej jeden punkt, aby policzyć ranking.")
+            return
+        if len(selected_criteria_columns) == 0:
+            st.info("Wybierz co najmniej jedno kryterium, aby policzyć ranking TOPSIS.")
+            return
+
+        topsis_details = compute_topsis_details(
+            points_dataframe,
+            criteria_columns=selected_criteria_columns,
+            criteria_weights_by_name=st.session_state.get("topsis_criteria_weights", {}),
+            criteria_impacts_by_name=st.session_state.get("topsis_criteria_impacts", {}),
+        )
+
+        if len(topsis_details.ranking_dataframe) == 0:
+            st.info("Brak danych do obliczeń.")
+            return
+
+        best_row = topsis_details.ranking_dataframe.iloc[0]
+        st.metric("Najlepszy wynik TOPSIS", f"{float(best_row.get('topsis_score', 0.0)):.6f}")
+        st.metric("Długość geograficzna najlepszego punktu (X)", f"{float(best_row.get('longitude', 0.0)):.6f}")
+        st.metric("Szerokość geograficzna najlepszego punktu (Y)", f"{float(best_row.get('latitude', 0.0)):.6f}")
+
+        st.subheader("Ranking punktów")
+        ranking_dataframe = topsis_details.ranking_dataframe.copy()
+        ranking_dataframe = ranking_dataframe.rename(
+            columns={
+                "longitude": "Długość geograficzna (X)",
+                "latitude": "Szerokość geograficzna (Y)",
+                "topsis_score": "Wynik TOPSIS",
+                "topsis_rank": "Pozycja w rankingu",
+            }
+        )
+        st.dataframe(ranking_dataframe, use_container_width=True)
+
+        if guided_mode:
+            with st.expander("Skąd się wziął ranking? Pokaż kroki obliczeń TOPSIS", expanded=True):
+                st.write("Krok 1: macierz decyzyjna (same kryteria). Braki są traktowane jako 0.")
+                st.dataframe(topsis_details.decision_matrix, use_container_width=True)
+
+                st.divider()
+                st.write("Krok 2: normalizacja wektorowa w kolumnach, aby różne skale nie dominowały.")
+                st.latex(r"r_{ij} = \frac{x_{ij}}{\sqrt{\sum_i x_{ij}^2}}")
+                st.dataframe(topsis_details.normalized_matrix, use_container_width=True)
+
+                st.divider()
+                st.write("Krok 3: wagi kryteriów (znormalizowane tak, aby sumowały się do 1).")
+                weights_dataframe = pd.DataFrame(
+                    [{"kryterium": column_name, "waga_znormalizowana": float(weight_value)} for column_name, weight_value in topsis_details.normalized_weights_by_column.items()]
+                )
+                weights_dataframe = weights_dataframe.rename(columns={"kryterium": "Kryterium", "waga_znormalizowana": "Waga znormalizowana"})
+                st.dataframe(weights_dataframe, use_container_width=True)
+
+                st.divider()
+                st.write("Krok 4: macierz znormalizowana i ważona.")
+                st.latex(r"v_{ij} = r_{ij} \cdot w_j")
+                st.dataframe(topsis_details.weighted_normalized_matrix, use_container_width=True)
+
+                st.divider()
+                st.write("Krok 5: ideał najlepszy i najgorszy dla każdego kryterium (korzyść/koszt).")
+                ideal_rows: List[Dict[str, float]] = []
+                for column_name in topsis_details.valid_criteria_columns:
+                    ideal_rows.append(
+                        {
+                            "kryterium": str(column_name),
+                            "ideał_najlepszy": float(topsis_details.ideal_best_by_column.get(column_name, 0.0)),
+                            "ideał_najgorszy": float(topsis_details.ideal_worst_by_column.get(column_name, 0.0)),
+                            "typ": "korzyść" if str(st.session_state.get("topsis_criteria_impacts", {}).get(column_name, "benefit")).strip().lower() != "cost" else "koszt",
+                        }
+                    )
+                ideals_dataframe = pd.DataFrame(ideal_rows)
+                ideals_dataframe = ideals_dataframe.rename(columns={"kryterium": "Kryterium", "ideał_najlepszy": "Ideał najlepszy", "ideał_najgorszy": "Ideał najgorszy", "typ": "Typ kryterium"})
+                st.dataframe(ideals_dataframe, use_container_width=True)
+
+                st.divider()
+                st.write("Krok 6: odległości od ideału najlepszego i najgorszego oraz wynik końcowy.")
+                st.latex(r"d^+_i = \sqrt{\sum_j (v_{ij} - v^+_j)^2} \qquad d^-_i = \sqrt{\sum_j (v_{ij} - v^-_j)^2}")
+                st.latex(r"s_i = \frac{d^-_i}{d^+_i + d^-_i}")
+
+                distances_dataframe = pd.DataFrame(
+                    {
+                        "odległość_do_najlepszego": [float(value) for value in topsis_details.distances_to_best],
+                        "odległość_do_najgorszego": [float(value) for value in topsis_details.distances_to_worst],
+                        "wynik_topsis": [float(value) for value in topsis_details.topsis_scores],
+                    }
+                )
+                distances_dataframe = distances_dataframe.rename(
+                    columns={
+                        "odległość_do_najlepszego": "Odległość do ideału najlepszego",
+                        "odległość_do_najgorszego": "Odległość do ideału najgorszego",
+                        "wynik_topsis": "Wynik TOPSIS",
+                    }
+                )
+                st.dataframe(distances_dataframe, use_container_width=True)
+
+        if st.button(
+            "Wyczyść wszystkie punkty",
+            use_container_width=True,
+            help="Usuwa wszystkie punkty i resetuje konfigurację rankingu.",
+            key="topsis_clear_points_button",
+        ):
+            st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude"])
+            st.session_state["topsis_selected_criteria_columns"] = []
+            st.session_state["topsis_criteria_weights"] = {}
+            st.session_state["topsis_criteria_impacts"] = {}
+            st.session_state["topsis_default_values_by_criteria"] = {}
+            st.session_state["map_marker_positions_snapshot"] = ()
+            st.success("Wyczyszczono dane.")
+            bump_interactive_folium_map_key()
 
 
 def run_app() -> None:
     st.set_page_config(page_title="Lokalizacja punktu logistycznego", layout="wide")
 
     init_session_state()
+    inject_responsive_layout_css()
 
     active_page, calculation_method, guided_mode = render_sidebar_menu()
 
     st.title("Lokalizacja punktu logistycznego")
-    st.caption("Dodaj punkty, wybierz metodę, a aplikacja policzy wynik i pokaże, skąd się wziął.")
+    st.caption("Pracuj na mapie i w tabeli. Punkty dodane, edytowane i usuwane na mapie od razu aktualizują dane.")
 
     if active_page == "Wyjaśnienie metod":
         render_methods_page()
@@ -1025,15 +1067,14 @@ def run_app() -> None:
         render_help_page()
         return
 
-    render_onboarding(calculation_method, guided_mode)
-
+    st.markdown('<div id="layout_anchor"></div>', unsafe_allow_html=True)
     control_column, map_column = st.columns([1, 2], gap="large")
-
-    with map_column:
-        render_map(calculation_method, guided_mode)
 
     with control_column:
         if calculation_method == "TOPSIS":
-            render_topsis_controls(guided_mode)
+            render_topsis_controls_panel(guided_mode)
         else:
-            render_centroid_controls(guided_mode)
+            render_centroid_controls_panel(guided_mode)
+
+    with map_column:
+        render_map(calculation_method, guided_mode)
