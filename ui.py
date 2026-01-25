@@ -224,18 +224,21 @@ def update_topsis_state_for_available_criteria(available_criteria_columns: List[
 
     st.session_state["topsis_selected_criteria_columns"] = selected_criteria_columns
 
-    criteria_weights: Dict[str, float] = dict(st.session_state.get("topsis_criteria_weights", {}))
-    criteria_impacts: Dict[str, str] = dict(st.session_state.get("topsis_criteria_impacts", {}))
-    default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+    criteria_weights: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_criteria_weights", {})).items()}
+    criteria_impacts: Dict[str, str] = {str(key).strip().lower(): str(value).strip().lower() for key, value in dict(st.session_state.get("topsis_criteria_impacts", {})).items()}
+    default_values_by_criteria: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_default_values_by_criteria", {})).items()}
 
-    updated_criteria_weights: Dict[str, float] = {}
-    updated_criteria_impacts: Dict[str, str] = {}
-    updated_default_values_by_criteria: Dict[str, float] = {}
+    updated_criteria_weights: Dict[str, float] = dict(criteria_weights)
+    updated_criteria_impacts: Dict[str, str] = dict(criteria_impacts)
+    updated_default_values_by_criteria: Dict[str, float] = dict(default_values_by_criteria)
 
-    for column_name in selected_criteria_columns:
-        updated_criteria_weights[column_name] = float(criteria_weights.get(column_name, 1.0))
-        updated_criteria_impacts[column_name] = str(criteria_impacts.get(column_name, "benefit")).strip().lower()
-        updated_default_values_by_criteria[column_name] = float(default_values_by_criteria.get(column_name, 1.0))
+    for column_name in available_criteria_columns:
+        if column_name not in updated_default_values_by_criteria:
+            updated_default_values_by_criteria[column_name] = 1.0
+        if column_name not in updated_criteria_weights:
+            updated_criteria_weights[column_name] = 1.0
+        if column_name not in updated_criteria_impacts:
+            updated_criteria_impacts[column_name] = "benefit"
 
     st.session_state["topsis_criteria_weights"] = updated_criteria_weights
     st.session_state["topsis_criteria_impacts"] = updated_criteria_impacts
@@ -335,22 +338,21 @@ def render_map_defaults_section(calculation_method: str) -> None:
 
     if calculation_method == "TOPSIS":
         st.write("Gdy dodasz marker na mapie, aplikacja utworzy nowy wiersz w tabeli.")
-        st.write("Poniższe wartości zostaną wpisane automatycznie do kryteriów dla nowego punktu.")
-        st.write("Te ustawienia dotyczą tylko nowych markerów dodanych w przyszłości.")
+        st.write("Poniższe wartości zostaną wpisane automatycznie do kolumn kryteriów dla nowego punktu.")
+        st.write("Domyślne wartości dotyczą tylko nowych markerów dodanych w przyszłości. Istniejące punkty nie zmieniają się automatycznie.")
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
         available_criteria_columns = get_topsis_candidate_criteria_columns(points_dataframe)
         update_topsis_state_for_available_criteria(available_criteria_columns)
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
 
-        if len(selected_criteria_columns) == 0:
-            st.info("Najpierw dodaj kryterium i wybierz je do obliczeń, wtedy pojawią się tutaj domyślne wartości.")
+        if len(available_criteria_columns) == 0:
+            st.info("Dodaj przynajmniej jedno kryterium, aby ustawić domyślne wartości dla punktów z mapy.")
             return
 
         current_default_values_by_criteria: Dict[str, float] = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
         updated_default_values_by_criteria: Dict[str, float] = dict(current_default_values_by_criteria)
 
-        for criterion_name in selected_criteria_columns:
+        for criterion_name in available_criteria_columns:
             updated_default_values_by_criteria[criterion_name] = st.number_input(
                 f"Domyślna wartość kryterium: {criterion_name}",
                 value=float(current_default_values_by_criteria.get(criterion_name, 1.0)),
@@ -391,14 +393,10 @@ def build_default_values_by_column_for_map(calculation_method: str, points_dataf
     non_coordinate_columns = [column_name for column_name in ensured_points_dataframe.columns if column_name not in ("longitude", "latitude")]
 
     if calculation_method == "TOPSIS":
-        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
-        default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
+        default_values_by_criteria = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_default_values_by_criteria", {})).items()}
         for column_name in non_coordinate_columns:
             normalized_column_name = str(column_name).strip().lower()
-            if normalized_column_name in selected_criteria_columns:
-                default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
-            else:
-                default_values_by_column[normalized_column_name] = 1.0
+            default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
         return default_values_by_column
 
     default_values_by_column["transport_rate"] = float(st.session_state.get("map_default_transport_rate", 1.0))
@@ -829,6 +827,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
                 current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
 
                 st.session_state["topsis_selected_criteria_columns"] = list(current_selected_criteria_columns)
+                st.session_state["topsis_selected_criteria_columns_widget"] = list(current_selected_criteria_columns)
                 st.session_state["topsis_criteria_weights"] = dict(current_criteria_weights_by_name)
                 st.session_state["topsis_criteria_impacts"] = dict(current_criteria_impacts_by_name)
                 st.session_state["topsis_default_values_by_criteria"] = dict(current_default_values_by_criteria)
@@ -902,6 +901,9 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
         update_topsis_state_for_available_criteria(available_criteria_columns)
         selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
 
+        non_coordinate_columns = [str(column_name).strip().lower() for column_name in list(points_dataframe.columns) if str(column_name).strip().lower() not in ("longitude", "latitude")]
+        default_values_by_criteria: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_default_values_by_criteria", {})).items()}
+
         with st.form("topsis_add_point_form", clear_on_submit=False):
             manual_longitude = st.number_input(
                 "Długość geograficzna (X)",
@@ -919,14 +921,17 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
             )
 
             manual_criteria_values: Dict[str, float] = {}
-            for criterion_name in selected_criteria_columns:
-                manual_criteria_values[criterion_name] = st.number_input(
-                    f"Wartość kryterium: {criterion_name}",
-                    value=float(st.session_state.get("topsis_default_values_by_criteria", {}).get(criterion_name, 1.0)),
-                    format="%.6f",
-                    help="Ustaw wartość kryterium dla dodawanego punktu. Domyślnie podstawiamy wartość ustawioną dla punktów z mapy.",
-                    key=f"topsis_manual_{criterion_name}",
-                )
+            for column_name in non_coordinate_columns:
+                if column_name in selected_criteria_columns:
+                    manual_criteria_values[column_name] = st.number_input(
+                        f"Wartość kryterium: {column_name}",
+                        value=float(default_values_by_criteria.get(column_name, 1.0)),
+                        format="%.6f",
+                        help="Ustaw wartość kryterium dla dodawanego punktu. Domyślnie podstawiamy wartość ustawioną dla punktów z mapy.",
+                        key=f"topsis_manual_{column_name}",
+                    )
+                else:
+                    manual_criteria_values[column_name] = float(default_values_by_criteria.get(column_name, 1.0))
 
             submit_add_point = st.form_submit_button(
                 "Dodaj punkt",
@@ -1059,6 +1064,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
         ):
             st.session_state["points_dataframe"] = pd.DataFrame(columns=["longitude", "latitude"])
             st.session_state["topsis_selected_criteria_columns"] = []
+            st.session_state["topsis_selected_criteria_columns_widget"] = []
             st.session_state["topsis_criteria_weights"] = {}
             st.session_state["topsis_criteria_impacts"] = {}
             st.session_state["topsis_default_values_by_criteria"] = {}
