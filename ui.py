@@ -239,7 +239,7 @@ def update_topsis_state_for_available_criteria(available_criteria_columns: List[
 
     st.session_state["topsis_criteria_weights"] = updated_criteria_weights
     st.session_state["topsis_criteria_impacts"] = updated_criteria_impacts
-    st.session_state["topsis_default_values_by_criteria"] = default_values_by_criteria | updated_default_values_by_criteria
+    st.session_state["topsis_default_values_by_criteria"] = updated_default_values_by_criteria
 
 
 def get_points_table_column_config_for_centroid() -> Dict[str, object]:
@@ -391,10 +391,14 @@ def build_default_values_by_column_for_map(calculation_method: str, points_dataf
     non_coordinate_columns = [column_name for column_name in ensured_points_dataframe.columns if column_name not in ("longitude", "latitude")]
 
     if calculation_method == "TOPSIS":
+        selected_criteria_columns = list(st.session_state.get("topsis_selected_criteria_columns", []))
         default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
         for column_name in non_coordinate_columns:
             normalized_column_name = str(column_name).strip().lower()
-            default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
+            if normalized_column_name in selected_criteria_columns:
+                default_values_by_column[normalized_column_name] = float(default_values_by_criteria.get(normalized_column_name, 1.0))
+            else:
+                default_values_by_column[normalized_column_name] = 1.0
         return default_values_by_column
 
     default_values_by_column["transport_rate"] = float(st.session_state.get("map_default_transport_rate", 1.0))
@@ -572,12 +576,12 @@ def render_start_tab(calculation_method: str, guided_mode: bool) -> None:
 
 
 def render_centroid_controls_panel(guided_mode: bool) -> None:
-    tab_sections = st.tabs(["Start", "Dane", "Dodawanie", "Wynik"])
+    tabs = st.tabs(["Start", "Dane", "Dodawanie", "Wynik"])
 
-    with tab_sections[0]:
+    with tabs[0]:
         render_start_tab("Środek ciężkości", guided_mode)
 
-    with tab_sections[1]:
+    with tabs[1]:
         render_file_import_section()
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
@@ -611,7 +615,7 @@ def render_centroid_controls_panel(guided_mode: bool) -> None:
         else:
             st.dataframe(display_dataframe, use_container_width=True)
 
-    with tab_sections[2]:
+    with tabs[2]:
         render_map_defaults_section("Środek ciężkości")
 
         st.divider()
@@ -667,7 +671,7 @@ def render_centroid_controls_panel(guided_mode: bool) -> None:
             st.success("Dodano punkt.")
             bump_interactive_folium_map_key()
 
-    with tab_sections[3]:
+    with tabs[3]:
         st.subheader("Wynik i wyjaśnienie")
 
         updated_points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=True)
@@ -733,12 +737,12 @@ def render_centroid_controls_panel(guided_mode: bool) -> None:
 
 
 def render_topsis_controls_panel(guided_mode: bool) -> None:
-    tab_sections = st.tabs(["Start", "Dane", "Konfiguracja", "Dodawanie", "Wynik"])
+    tabs = st.tabs(["Start", "Dane", "Konfiguracja", "Dodawanie", "Wynik"])
 
-    with tab_sections[0]:
+    with tabs[0]:
         render_start_tab("TOPSIS", guided_mode)
 
-    with tab_sections[1]:
+    with tabs[1]:
         render_file_import_section()
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
@@ -770,7 +774,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
         else:
             st.dataframe(points_dataframe, use_container_width=True)
 
-    with tab_sections[2]:
+    with tabs[2]:
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
 
         st.subheader("Dodaj kryterium")
@@ -786,35 +790,50 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
             "Wartość startowa nowego kryterium",
             value=1.0,
             format="%.6f",
-            help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium oraz będzie używana jako domyślna dla punktów dodawanych z mapy.",
+            help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium oraz stanie się domyślną wartością dla mapy i dodawania ręcznego.",
             key="topsis_criterion_default_value",
         )
 
         if st.button(
             "Dodaj kryterium do tabeli",
             use_container_width=True,
-            help="Doda nową kolumnę do tabeli punktów.",
+            help="Doda nową kolumnę do tabeli punktów. Ustawimy też domyślne wartości dla mapy i dodawania ręcznego.",
             key="topsis_add_criterion_button",
         ):
             normalized_criterion_column_name = str(criterion_column_name).strip().lower()
             if normalized_criterion_column_name:
                 updated_points_dataframe = points_dataframe.copy()
+
+                current_selected_criteria_columns = [str(value).strip().lower() for value in list(st.session_state.get("topsis_selected_criteria_columns", [])) if str(value).strip()]
+                current_criteria_weights_by_name: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_criteria_weights", {})).items()}
+                current_criteria_impacts_by_name: Dict[str, str] = {str(key).strip().lower(): str(value).strip().lower() for key, value in dict(st.session_state.get("topsis_criteria_impacts", {})).items()}
+                current_default_values_by_criteria: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_default_values_by_criteria", {})).items()}
+
                 if normalized_criterion_column_name not in updated_points_dataframe.columns:
                     updated_points_dataframe[normalized_criterion_column_name] = float(criterion_default_value)
                     st.session_state["points_dataframe"] = updated_points_dataframe
-
-                    current_default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
-                    current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
-                    st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in current_default_values_by_criteria.items()}
-
                     st.session_state["map_marker_positions_snapshot"] = ()
-                    st.success("Dodano kryterium.")
-                    bump_interactive_folium_map_key()
+                    st.success("Dodano kryterium do tabeli.")
                 else:
-                    current_default_values_by_criteria = dict(st.session_state.get("topsis_default_values_by_criteria", {}))
-                    current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
-                    st.session_state["topsis_default_values_by_criteria"] = {str(key).strip().lower(): float(value) for key, value in current_default_values_by_criteria.items()}
-                    st.warning("Takie kryterium już istnieje. Zaktualizowano domyślną wartość dla punktów dodawanych z mapy.")
+                    st.info("Takie kryterium już istnieje w tabeli. Zaktualizowano domyślne wartości dla mapy i dodawania ręcznego.")
+
+                if normalized_criterion_column_name not in current_selected_criteria_columns:
+                    current_selected_criteria_columns.append(normalized_criterion_column_name)
+
+                if normalized_criterion_column_name not in current_criteria_weights_by_name:
+                    current_criteria_weights_by_name[normalized_criterion_column_name] = 1.0
+
+                if normalized_criterion_column_name not in current_criteria_impacts_by_name:
+                    current_criteria_impacts_by_name[normalized_criterion_column_name] = "benefit"
+
+                current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
+
+                st.session_state["topsis_selected_criteria_columns"] = list(current_selected_criteria_columns)
+                st.session_state["topsis_criteria_weights"] = dict(current_criteria_weights_by_name)
+                st.session_state["topsis_criteria_impacts"] = dict(current_criteria_impacts_by_name)
+                st.session_state["topsis_default_values_by_criteria"] = dict(current_default_values_by_criteria)
+
+                bump_interactive_folium_map_key()
             else:
                 st.warning("Podaj nazwę kryterium.")
 
@@ -872,7 +891,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
         st.session_state["topsis_criteria_weights"] = {str(key).strip().lower(): float(value) for key, value in criteria_weights.items()}
         st.session_state["topsis_criteria_impacts"] = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts.items()}
 
-    with tab_sections[3]:
+    with tabs[3]:
         render_map_defaults_section("TOPSIS")
 
         st.divider()
@@ -903,9 +922,9 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
             for criterion_name in selected_criteria_columns:
                 manual_criteria_values[criterion_name] = st.number_input(
                     f"Wartość kryterium: {criterion_name}",
-                    value=float(st.session_state["topsis_default_values_by_criteria"].get(criterion_name, 1.0)),
+                    value=float(st.session_state.get("topsis_default_values_by_criteria", {}).get(criterion_name, 1.0)),
                     format="%.6f",
-                    help="Ustaw wartość kryterium dla dodawanego punktu.",
+                    help="Ustaw wartość kryterium dla dodawanego punktu. Domyślnie podstawiamy wartość ustawioną dla punktów z mapy.",
                     key=f"topsis_manual_{criterion_name}",
                 )
 
@@ -928,7 +947,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
             st.success("Dodano punkt.")
             bump_interactive_folium_map_key()
 
-    with tab_sections[4]:
+    with tabs[4]:
         st.subheader("Wynik i wyjaśnienie")
 
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
