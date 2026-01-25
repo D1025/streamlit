@@ -776,7 +776,7 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
         points_dataframe = ensure_points_dataframe(st.session_state["points_dataframe"], include_transport_rate_and_mass=False)
 
         st.subheader("Dodaj kryterium")
-        st.caption("Kryterium to dodatkowa kolumna liczbowa opisująca punkt. Przykłady: koszt, czas, ryzyko, dostępność.")
+        st.caption("Kryterium to dodatkowa kolumna liczbowa opisująca punkt. Przykłady: koszt, czas, ryzyko, dostępność. Nowe kryterium zawsze startuje z wartością 1.")
 
         criterion_column_name = st.text_input(
             "Nazwa nowego kryterium",
@@ -784,18 +784,11 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
             help="Wpisz nazwę kolumny-kryterium. Używaj nazw prostych i bez spacji, np. koszt, czas, ryzyko.",
             key="topsis_criterion_column_name",
         )
-        criterion_default_value = st.number_input(
-            "Wartość startowa nowego kryterium",
-            value=1.0,
-            format="%.6f",
-            help="Ta wartość zostanie wpisana w istniejących punktach w chwili dodania nowego kryterium oraz stanie się domyślną wartością dla mapy i dodawania ręcznego.",
-            key="topsis_criterion_default_value",
-        )
 
         if st.button(
             "Dodaj kryterium do tabeli",
             use_container_width=True,
-            help="Doda nową kolumnę do tabeli punktów. Ustawimy też domyślne wartości dla mapy i dodawania ręcznego.",
+            help="Doda nową kolumnę do tabeli punktów. Wartość startowa nowego kryterium jest ustawiana na 1.",
             key="topsis_add_criterion_button",
         ):
             normalized_criterion_column_name = str(criterion_column_name).strip().lower()
@@ -808,12 +801,12 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
                 current_default_values_by_criteria: Dict[str, float] = {str(key).strip().lower(): float(value) for key, value in dict(st.session_state.get("topsis_default_values_by_criteria", {})).items()}
 
                 if normalized_criterion_column_name not in updated_points_dataframe.columns:
-                    updated_points_dataframe[normalized_criterion_column_name] = float(criterion_default_value)
+                    updated_points_dataframe[normalized_criterion_column_name] = 1.0
                     st.session_state["points_dataframe"] = updated_points_dataframe
                     st.session_state["map_marker_positions_snapshot"] = ()
                     st.success("Dodano kryterium do tabeli.")
                 else:
-                    st.info("Takie kryterium już istnieje w tabeli. Zaktualizowano domyślne wartości dla mapy i dodawania ręcznego.")
+                    st.info("Takie kryterium już istnieje w tabeli. Nie zmieniono danych w kolumnie.")
 
                 if normalized_criterion_column_name not in current_selected_criteria_columns:
                     current_selected_criteria_columns.append(normalized_criterion_column_name)
@@ -824,7 +817,8 @@ def render_topsis_controls_panel(guided_mode: bool) -> None:
                 if normalized_criterion_column_name not in current_criteria_impacts_by_name:
                     current_criteria_impacts_by_name[normalized_criterion_column_name] = "benefit"
 
-                current_default_values_by_criteria[normalized_criterion_column_name] = float(criterion_default_value)
+                if normalized_criterion_column_name not in current_default_values_by_criteria:
+                    current_default_values_by_criteria[normalized_criterion_column_name] = 1.0
 
                 st.session_state["topsis_selected_criteria_columns"] = list(current_selected_criteria_columns)
                 st.session_state["topsis_selected_criteria_columns_widget"] = list(current_selected_criteria_columns)

@@ -191,24 +191,6 @@ def append_point(
     return updated_points_dataframe
 
 
-def read_points_from_uploaded_file(uploaded_file) -> PointsDF:
-    if uploaded_file is None:
-        return pd.DataFrame(columns=["longitude", "latitude"])
-
-    uploaded_name = str(getattr(uploaded_file, "name", "")).lower()
-    try:
-        if uploaded_name.endswith(".csv"):
-            uploaded_dataframe = pd.read_csv(uploaded_file)
-        elif uploaded_name.endswith(".xlsx") or uploaded_name.endswith(".xls"):
-            uploaded_dataframe = pd.read_excel(uploaded_file)
-        else:
-            uploaded_dataframe = pd.read_csv(uploaded_file)
-    except Exception:
-        return pd.DataFrame(columns=["longitude", "latitude"])
-
-    return ensure_points_dataframe(uploaded_dataframe, include_transport_rate_and_mass=False)
-
-
 def read_points_from_uploaded_file_with_status(uploaded_file) -> Tuple[PointsDF, str, str]:
     if uploaded_file is None:
         return pd.DataFrame(columns=["longitude", "latitude"]), "Nie wybrano pliku.", "info"
@@ -233,18 +215,6 @@ def read_points_from_uploaded_file_with_status(uploaded_file) -> Tuple[PointsDF,
         return ensured_points_dataframe, "Plik wczytano, ale nie znaleziono poprawnych współrzędnych (X i Y).", "warning"
 
     return ensured_points_dataframe, f"Wczytano punkty z pliku: {uploaded_name}", "success"
-
-
-def compute_center_of_gravity(points_dataframe: Optional[PointsDF]) -> Tuple[float, float, float]:
-    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=True)
-
-    centroid_calculator = CentroidCalculator()
-    for _, row in ensured_points_dataframe.iterrows():
-        centroid_calculator.add(row["longitude"], row["latitude"], row["transport_rate"], row["mass"])
-
-    centroid_longitude, centroid_latitude, _, _, _, _ = centroid_calculator.centroid()
-    weighted_distance_sum = centroid_calculator.weighted_euclidean_distance_sum(centroid_longitude, centroid_latitude)
-    return centroid_longitude, centroid_latitude, weighted_distance_sum
 
 
 def compute_center_of_gravity_details(points_dataframe: Optional[PointsDF]) -> CenterOfGravityDetails:
@@ -291,24 +261,6 @@ def compute_center_of_gravity_details(points_dataframe: Optional[PointsDF]) -> C
         used_fallback_average=bool(used_fallback_average),
         per_point_breakdown_dataframe=per_point_breakdown_dataframe,
     )
-
-
-def compute_point_distances(points_dataframe: Optional[PointsDF], centroid_longitude: float, centroid_latitude: float) -> PointsDF:
-    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=True)
-    output_dataframe = ensured_points_dataframe.copy()
-
-    euclidean_distances: List[float] = []
-    weighted_euclidean_distances: List[float] = []
-
-    for _, row in output_dataframe.iterrows():
-        euclidean_distance = math.sqrt((float(centroid_longitude) - float(row["longitude"])) ** 2 + (float(centroid_latitude) - float(row["latitude"])) ** 2)
-        point_weight = float(row["transport_rate"]) * float(row["mass"])
-        euclidean_distances.append(float(euclidean_distance))
-        weighted_euclidean_distances.append(float(point_weight) * float(euclidean_distance))
-
-    output_dataframe["euclidean_distance"] = euclidean_distances
-    output_dataframe["weighted_euclidean_distance"] = weighted_euclidean_distances
-    return output_dataframe
 
 
 def get_map_center(points_dataframe: Optional[PointsDF], reference_longitude: float, reference_latitude: float) -> Tuple[float, float]:
@@ -505,107 +457,6 @@ def get_topsis_candidate_criteria_columns(points_dataframe: Optional[PointsDF]) 
             numeric_candidate_columns.append(str(column_name))
 
     return sorted(numeric_candidate_columns)
-
-
-def compute_topsis_ranking(
-    points_dataframe: Optional[PointsDF],
-    criteria_columns: Sequence[str],
-    criteria_weights_by_name: Optional[Dict[str, float]] = None,
-    criteria_impacts_by_name: Optional[Dict[str, str]] = None,
-) -> PointsDF:
-    ensured_points_dataframe = ensure_points_dataframe(points_dataframe, include_transport_rate_and_mass=False).copy()
-    normalized_criteria_columns = [str(column_name).strip().lower() for column_name in criteria_columns if str(column_name).strip()]
-
-    if len(ensured_points_dataframe) == 0:
-        ensured_points_dataframe["topsis_score"] = pd.Series(dtype="float64")
-        ensured_points_dataframe["topsis_rank"] = pd.Series(dtype="int64")
-        return ensured_points_dataframe
-
-    normalized_dataframe = normalize_column_names(ensured_points_dataframe)
-    ensured_points_dataframe = normalized_dataframe
-
-    if len(normalized_criteria_columns) == 0:
-        ensured_points_dataframe["topsis_score"] = 0.0
-        ensured_points_dataframe["topsis_rank"] = list(range(1, len(ensured_points_dataframe) + 1))
-        return ensured_points_dataframe
-
-    valid_criteria_columns = [column_name for column_name in normalized_criteria_columns if column_name in ensured_points_dataframe.columns]
-    if len(valid_criteria_columns) == 0:
-        ensured_points_dataframe["topsis_score"] = 0.0
-        ensured_points_dataframe["topsis_rank"] = list(range(1, len(ensured_points_dataframe) + 1))
-        return ensured_points_dataframe
-
-    weights_by_name: Dict[str, float] = {}
-    if criteria_weights_by_name:
-        weights_by_name = {str(key).strip().lower(): float(value) for key, value in criteria_weights_by_name.items()}
-
-    impacts_by_name: Dict[str, str] = {}
-    if criteria_impacts_by_name:
-        impacts_by_name = {str(key).strip().lower(): str(value).strip().lower() for key, value in criteria_impacts_by_name.items()}
-
-    decision_matrix = ensured_points_dataframe[valid_criteria_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-
-    raw_weights: List[float] = []
-    for column_name in valid_criteria_columns:
-        raw_weights.append(float(weights_by_name.get(column_name, 1.0)))
-
-    total_weight = float(sum(raw_weights))
-    if abs(total_weight) < 1e-12:
-        normalized_weights = [1.0 / float(len(valid_criteria_columns)) for _ in valid_criteria_columns]
-    else:
-        normalized_weights = [float(weight_value) / total_weight for weight_value in raw_weights]
-
-    normalized_matrix = decision_matrix.copy()
-    for column_name in valid_criteria_columns:
-        column_values = decision_matrix[column_name].astype(float)
-        denominator = float(math.sqrt(float((column_values ** 2).sum())))
-        if abs(denominator) < 1e-12:
-            normalized_matrix[column_name] = 0.0
-        else:
-            normalized_matrix[column_name] = column_values / denominator
-
-    weighted_normalized_matrix = normalized_matrix.copy()
-    for column_index, column_name in enumerate(valid_criteria_columns):
-        weighted_normalized_matrix[column_name] = weighted_normalized_matrix[column_name].astype(float) * float(normalized_weights[column_index])
-
-    ideal_best_by_column: Dict[str, float] = {}
-    ideal_worst_by_column: Dict[str, float] = {}
-
-    for column_name in valid_criteria_columns:
-        impact_value = impacts_by_name.get(column_name, "benefit")
-        column_values = weighted_normalized_matrix[column_name].astype(float)
-        if impact_value == "cost":
-            ideal_best_by_column[column_name] = float(column_values.min())
-            ideal_worst_by_column[column_name] = float(column_values.max())
-        else:
-            ideal_best_by_column[column_name] = float(column_values.max())
-            ideal_worst_by_column[column_name] = float(column_values.min())
-
-    distances_to_best: List[float] = []
-    distances_to_worst: List[float] = []
-
-    for _, row in weighted_normalized_matrix.iterrows():
-        best_distance_sum = 0.0
-        worst_distance_sum = 0.0
-        for column_name in valid_criteria_columns:
-            value = float(row[column_name])
-            best_distance_sum += (value - float(ideal_best_by_column[column_name])) ** 2
-            worst_distance_sum += (value - float(ideal_worst_by_column[column_name])) ** 2
-        distances_to_best.append(float(math.sqrt(best_distance_sum)))
-        distances_to_worst.append(float(math.sqrt(worst_distance_sum)))
-
-    topsis_scores: List[float] = []
-    for best_distance, worst_distance in zip(distances_to_best, distances_to_worst):
-        denominator = float(best_distance) + float(worst_distance)
-        if abs(denominator) < 1e-12:
-            topsis_scores.append(0.0)
-        else:
-            topsis_scores.append(float(worst_distance) / denominator)
-
-    ensured_points_dataframe["topsis_score"] = topsis_scores
-    ensured_points_dataframe = ensured_points_dataframe.sort_values(by=["topsis_score"], ascending=False).reset_index(drop=True)
-    ensured_points_dataframe["topsis_rank"] = list(range(1, len(ensured_points_dataframe) + 1))
-    return ensured_points_dataframe
 
 
 def compute_topsis_details(
